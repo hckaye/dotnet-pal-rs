@@ -15,6 +15,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Rust toolchain
         run: |
           rustup toolchain install 1.85.1 --profile minimal
@@ -29,7 +31,7 @@ jobs:
         run: bash scripts/check.sh
       - name: Clock, scheduler, interrupted sleep and host fault tests
         run: bash scripts/services.sh
-      - name: Kernel synchronization, TLS and thread conformance
+      - name: Synchronization, thread, TLS, stack and process-barrier contracts
         run: bash scripts/kernel.sh
       - name: Actual NativeAOT GC negative and positive controls
         run: bash scripts/nativeaot.sh
@@ -44,12 +46,13 @@ jobs:
           repository: dotnet/runtime
           ref: 60629d14374c56f1cb51819049ad1fa529307f8d
           path: artifacts/runtime
+          persist-credentials: false
           sparse-checkout-cone-mode: false
           sparse-checkout: |
             /src/coreclr/gc/unix/gcenv.unix.cpp
-            /src/coreclr/nativeaot/Runtime/CMakeLists.txt
             /src/coreclr/gc/env/gcenv.os.h
             /src/coreclr/gc/unix/events.cpp
+            /src/coreclr/nativeaot/Runtime/CMakeLists.txt
             /src/coreclr/nativeaot/Runtime/unix/PalUnix.cpp
             /src/coreclr/nativeaot/Runtime/Crst.h
             /src/coreclr/nativeaot/Runtime/Crst.cpp
@@ -65,6 +68,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -90,15 +95,17 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Build host boundary without std or 64-bit atomics
         run: |
           rustup toolchain install 1.85.1 --profile minimal
           rustup override set 1.85.1
           for target in aarch64-unknown-none riscv64gc-unknown-none-elf thumbv7em-none-eabi; do
             rustup target add "$target"
-            cargo build --release --no-default-features --features host --target "$target"
-            cargo build --release --no-default-features --features host-services --target "$target"
-            cargo build --release --no-default-features --features host-kernel --target "$target"
+            for profile in host host-services host-kernel; do
+              cargo build --release --no-default-features --features "$profile" --target "$target"
+            done
           done
 
   source-runtime:
@@ -110,11 +117,14 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/checkout@v4
         with:
           repository: dotnet/runtime
           ref: 60629d14374c56f1cb51819049ad1fa529307f8d
           path: artifacts/runtime-source
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.100'
@@ -123,8 +133,8 @@ jobs:
           rustup toolchain install 1.85.1 --profile minimal
           rustup override set 1.85.1
           sudo apt-get update
-          sudo apt-get install -y clang llvm lld cmake ninja-build python3 libicu-dev liblttng-ust-dev libunwind-dev libssl-dev libkrb5-dev zlib1g-dev
-      - name: Rebuild native runtime; verify VM, clock, synchronization, TLS and thread paths without linker wrapping
+          sudo apt-get install -y clang llvm lld cmake ninja-build python3 time libicu-dev liblttng-ust-dev libunwind-dev libssl-dev libkrb5-dev zlib1g-dev
+      - name: Rebuild and qualify both native GC profiles without linker wrapping
         run: bash scripts/source-runtime.sh artifacts/runtime-source
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
@@ -132,8 +142,9 @@ jobs:
           name: source-runtime-evidence-${{ matrix.runner }}
           path: |
             artifacts/source-build.log
-            artifacts/source-undefined.txt
-            artifacts/source-*-symbols.txt
-            artifacts/source-*-run.log
+            artifacts/source-*-undefined.txt
             artifacts/source-manifest.json
-          if-no-files-found: warn
+            artifacts/qualification/**/*.log
+            artifacts/qualification/**/symbols.txt
+            artifacts/qualification/*-benchmark.json
+          if-no-files-found: error

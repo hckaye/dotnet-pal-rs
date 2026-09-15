@@ -17,16 +17,16 @@ SYMBOLS = (
 )
 RUNTIME_REVISION = "60629d14374c56f1cb51819049ad1fa529307f8d"
 
+
 def defined(path):
     result = subprocess.run(["nm", "-g", "--defined-only", str(path)],
                             check=True, capture_output=True, text=True)
     return {line.split()[-1] for line in result.stdout.splitlines() if line.split()}
 
+
 def audit_runtime(path, source_manifest=None):
-    # Use the exact archive selected by SetupOSSpecificProps, not a guessed
-    # NuGet layout. SDK-managed packs can live outside project.assets.json.
     path = path.resolve()
-    if path.name != "libRuntime.WorkstationGC.a":
+    if path.name not in ("libRuntime.WorkstationGC.a", "libRuntime.ServerGC.a"):
         raise SystemExit(f"Unaudited NativeAOT runtime archive: {path}")
     if not path.is_file():
         raise SystemExit(f"Selected NativeAOT runtime archive is missing: {path}")
@@ -34,8 +34,6 @@ def audit_runtime(path, source_manifest=None):
         if "10.0.0" not in path.parts:
             raise SystemExit(f"Unpinned published archive: {path}")
     else:
-        # A rebuilt archive is not a NuGet package. Check the pinned source
-        # revision AND the exact build artifact digest, not a version-like path.
         try:
             manifest = json.loads(Path(source_manifest).read_text())
         except (OSError, ValueError) as error:
@@ -47,7 +45,10 @@ def audit_runtime(path, source_manifest=None):
         if manifest.get("adapter") != "dotnet-pal-gc-vm-v2":
             raise SystemExit("Source manifest has an unknown adapter")
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if manifest.get("archive_sha256") != digest:
+        digests = manifest.get("archives")
+        expected = (digests.get(path.name) if isinstance(digests, dict) else
+                    manifest.get("archive_sha256") if path.name == "libRuntime.WorkstationGC.a" else None)
+        if expected != digest:
             raise SystemExit("Source archive does not match its build manifest")
     missing = set(SYMBOLS) - defined(path)
     if missing:
@@ -78,6 +79,7 @@ def main():
         audit_runtime(args.runtime, args.source_manifest)
     if not args.props and not args.runtime:
         parser.error("specify --props or --runtime")
+
 
 if __name__ == "__main__":
     main()

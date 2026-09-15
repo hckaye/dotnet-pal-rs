@@ -7,6 +7,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <DefineConstants Condition="'$(PalQualificationObject)' != ''">$(DefineConstants);PAL_QUALIFICATION</DefineConstants>
     <StripSymbols>false</StripSymbols>
     <InvariantGlobalization>true</InvariantGlobalization>
     <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
@@ -16,13 +17,14 @@
     <PalWrap Condition="'$(PalWrap)' == ''">true</PalWrap>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Remove="RuntimeQualification.cs" Condition="'$(PalQualificationObject)' == ''" />
     <DirectPInvoke Include="__Internal" />
     <NativeLibrary Include="$(PalObserverObject)" />
     <NativeLibrary Include="$(PalLib)" />
+    <NativeLibrary Include="$(PalQualificationObject)" Condition="'$(PalQualificationObject)' != ''" />
     <NativeLibrary Include="$(PalHostObject)" Condition="'$(PalHostObject)' != ''" />
   </ItemGroup>
   <Import Project="../../artifacts/wrap.props" Condition="'$(PalWrap)' == 'true'" />
-  <!-- Audit the actual link input, including SDK-managed pack locations. -->
   <Target Name="PalAuditRuntime" BeforeTargets="LinkNative" DependsOnTargets="SetupOSSpecificProps">
     <Error Condition="'$(RuntimeFrameworkVersion)' != '10.0.0'" Text="This probe requires runtime 10.0.0" />
     <WriteLinesToFile File="$(PalRoot)/artifacts/runtime-archive.txt" Lines="$(IlcSdkPath)$(FullRuntimeName).a" Overwrite="true" />

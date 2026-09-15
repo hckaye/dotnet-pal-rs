@@ -10,7 +10,6 @@ internal static class Program
     }
     [DllImport("__Internal", EntryPoint = "dotnet_pal_probe_stats")]
     private static extern uint ReadStats(out Stats stats, nuint size);
-
     [StructLayout(LayoutKind.Sequential)]
     private struct ServicesStats
     {
@@ -94,6 +93,9 @@ internal static class Program
     }
     public static int Main(string[] args)
     {
+#if PAL_QUALIFICATION
+        if (args.Length > 0 && args[0] == "qualify") return RuntimeQualification.Run(args);
+#endif
         bool sourceKernel = args.Length == 1 && args[0] == "source-kernel";
         bool sourceServices = sourceKernel || (args.Length == 1 && args[0] == "source-services");
         bool wrapped = sourceServices || (args.Length == 1 && args[0] == "wrapped");
