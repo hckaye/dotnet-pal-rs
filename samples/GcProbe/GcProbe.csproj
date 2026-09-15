@@ -12,11 +12,12 @@
     <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
     <PalRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))</PalRoot>
     <PalLib Condition="'$(PalLib)' == ''">$(PalRoot)/target/release/libdotnet_pal_rs.a</PalLib>
+    <PalObserverObject Condition="'$(PalObserverObject)' == ''">$(PalRoot)/artifacts/gc_wrap.o</PalObserverObject>
     <PalWrap Condition="'$(PalWrap)' == ''">true</PalWrap>
   </PropertyGroup>
   <ItemGroup>
     <DirectPInvoke Include="__Internal" />
-    <NativeLibrary Include="$(PalRoot)/artifacts/gc_wrap.o" />
+    <NativeLibrary Include="$(PalObserverObject)" />
     <NativeLibrary Include="$(PalLib)" />
     <NativeLibrary Include="$(PalHostObject)" Condition="'$(PalHostObject)' != ''" />
   </ItemGroup>
@@ -24,6 +25,7 @@
   <!-- Audit the actual link input, including SDK-managed pack locations. -->
   <Target Name="PalAuditRuntime" BeforeTargets="LinkNative" DependsOnTargets="SetupOSSpecificProps">
     <Error Condition="'$(RuntimeFrameworkVersion)' != '10.0.0'" Text="This probe requires runtime 10.0.0" />
+    <WriteLinesToFile File="$(PalRoot)/artifacts/runtime-archive.txt" Lines="$(IlcSdkPath)$(FullRuntimeName).a" Overwrite="true" />
     <Exec Command="python3 &quot;$(PalRoot)/integration/dotnet10/symbols.py&quot; --runtime &quot;$(IlcSdkPath)$(FullRuntimeName).a&quot;" />
   </Target>
 </Project>

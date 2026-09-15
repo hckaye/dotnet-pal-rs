@@ -46,4 +46,5 @@ forward!(commit);
 forward!(decommit);
 forward!(release);
 forward!(reset);
+#[cfg(not(test))]
 pub unsafe fn abort() -> ! { unsafe { dotnet_pal_host_abort() } }

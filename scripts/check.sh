@@ -15,3 +15,9 @@ cc -std=c11 -Wall -Wextra -Werror -Iinclude tests/invalid_host.c target/host/rel
 c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Inative tests/adapter.cpp -o artifacts/adapter
 ./artifacts/adapter
 python3 -m unittest discover -s tests -p 'test_*.py'
+cargo test --lib --no-default-features --features linear
+cargo build --release --no-default-features --features linear --target-dir target/linear
+cc -std=c11 -Wall -Wextra -Werror -Iinclude tests/linear.c target/linear/release/libdotnet_pal_rs.a -ldl -lpthread -lm -o artifacts/linear
+./artifacts/linear
+cc -std=c11 -Wall -Wextra -Werror -Iinclude tests/linear_threads.c target/linear/release/libdotnet_pal_rs.a -ldl -lpthread -lm -o artifacts/linear-threads
+./artifacts/linear-threads

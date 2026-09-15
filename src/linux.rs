@@ -52,4 +52,5 @@ pub unsafe fn reset(address: *mut c_void, size: usize) -> u32 {
 }
 
 fn status(result: i32) -> u32 { if result == 0 { OK } else { OS_ERROR } }
+#[cfg(not(test))]
 pub unsafe fn abort() -> ! { unsafe { libc::abort() } }

@@ -15,9 +15,11 @@ static uint32_t range(void *p, size_t n) {
     assert(p == storage && n == 123);
     return DOTNET_PAL_OK;
 }
-static const dotnet_pal_api API = {
+static size_t page_size() { return 4096; }
+static dotnet_pal_api API = {
     { DOTNET_PAL_ABI_VERSION, sizeof(dotnet_pal_api), DOTNET_PAL_CAP_VM },
-    { nullptr, reserve, range, range, range, range }, nullptr
+    { page_size, reserve, range, range, range, range }, nullptr,
+    { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr }
 };
 extern "C" const dotnet_pal_api *dotnet_pal_get_api(uint32_t version) {
     assert(version == DOTNET_PAL_ABI_VERSION);
@@ -32,6 +34,19 @@ int main() {
     assert(dotnet_pal_gc::release(storage, 123));
     assert(dotnet_pal_gc::large_pages(123, UINT16_MAX) == nullptr);
     assert(calls == 6);
+    API.header.capabilities = DOTNET_PAL_CAP_LINEAR;
+    assert(dotnet_pal_gc::api() == nullptr); // NEVER pass linear storage to this VM adapter
+    API.header.capabilities = DOTNET_PAL_CAP_VM;
+    API.header.abi_version = 999;
+    assert(dotnet_pal_gc::api() == nullptr);
+    API.header.abi_version = DOTNET_PAL_ABI_VERSION;
+    API.header.struct_size = DOTNET_PAL_VM_API_SIZE - 1;
+    assert(dotnet_pal_gc::api() == nullptr);
+    API.header.struct_size = DOTNET_PAL_VM_API_SIZE;
+    assert(dotnet_pal_gc::api() == &API); // accepts original ABI 2 prefix
+    API.vm.commit = nullptr;
+    assert(dotnet_pal_gc::api() == nullptr);
+    API.vm.commit = range;
     enabled = false;
     assert(dotnet_pal_gc::reserve(123, 4096, 0, 0) == nullptr);
     assert(!dotnet_pal_gc::commit(storage, 123, 0));

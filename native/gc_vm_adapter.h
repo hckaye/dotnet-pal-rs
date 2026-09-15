@@ -7,8 +7,11 @@
 namespace dotnet_pal_gc {
 inline const dotnet_pal_api *api() {
     const auto *p = dotnet_pal_get_api(DOTNET_PAL_ABI_VERSION);
-    return p && p->header.struct_size >= sizeof(dotnet_pal_api) &&
-        (p->header.capabilities & DOTNET_PAL_CAP_VM) ? p : nullptr;
+    return p && p->header.abi_version == DOTNET_PAL_ABI_VERSION &&
+        p->header.struct_size >= DOTNET_PAL_VM_API_SIZE &&
+        (p->header.capabilities & DOTNET_PAL_CAP_VM) &&
+        p->vm.page_size && p->vm.reserve && p->vm.commit && p->vm.decommit &&
+        p->vm.release && p->vm.reset ? p : nullptr;
 }
 inline void *reserve(size_t size, size_t alignment, uint32_t flags, uint16_t node) {
     (void)node; // NUMA is an advisory hint; placement is not implemented in this PoC.

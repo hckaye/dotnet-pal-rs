@@ -1,6 +1,6 @@
 [package]
 name = "dotnet-pal-rs"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Experimental no_std OS boundary for NativeAOT portability research"
@@ -13,6 +13,7 @@ crate-type = ["staticlib", "rlib"]
 default = ["linux"]
 linux = ["dep:libc"]
 host = []
+linear = []
 
 [dependencies]
 libc = { version = "=0.2.169", default-features = false, optional = true }
