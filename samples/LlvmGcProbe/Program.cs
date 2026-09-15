@@ -41,6 +41,9 @@ public static class Program
         Check(!RuntimeFeature.IsDynamicCodeSupported, "AOT required");
         Check(CheckErrorText() == 1, "error conversion failed");
         Check(Observe(out StorageStats storageBefore, out AdapterStats before, out ServicesStats servicesBefore) == 0, "observer failed");
+        // The initial observer precedes the workload: startup evidence is not
+        // manufactured by later allocation or finalization tests.
+        WasmQualification.Run();
         long checksum = 0;
         int caught = 0, finals = 0;
         for (int wave = 0; wave < 8; ++wave)

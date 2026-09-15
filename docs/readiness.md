@@ -1,46 +1,62 @@
-# Readiness gates
+# Readiness gates and uncompleted work
 
-The supported unit of evidence is a **configuration at a specific commit**, not
-"every Rust target". Compilation and runtime execution have separate labels.
-No production readiness or complete NativeAOT port is claimed.
+Evidence is a **configuration at an exact commit**, not a blanket claim about
+all Rust targets. The project is not yet a complete OS-independent NativeAOT port.
+The following gates describe what the executable suites actually establish.
 
-## Current acceptance gates
+## Implemented qualification
 
-- Linux x64/ARM64 VM semantics, both backends, and actual GC baseline/positive controls.
-- Rebuilt native NativeAOT runtime on x64/ARM64, with VM and clock/scheduling source
-  adapters and both Linux/host-services implementations. No --wrap in these runs.
-  Published compiler/BCL remain pinned. Clock counts must grow from GC execution;
-  VM-only/baseline service counters must stay zero. Sleep/yield usage is not forced
-  in GC probes and is tested separately through the C ABI.
-- Distinct linear storage capability rejected by the VM adapter; C-to-Rust tests
-  execute on three Wasm target builds and natively.
-- Real WASIp1 clock import, absent scheduling callbacks, missing-import rejection,
-  isolated failure injection, output sanitization and exact import allowlist.
-- Legacy VM host linkage remains valid. Optional host-services rejects malformed
-  tables and sanitizes failures. Linux sleep retries interruption, clocks remain
-  monotonic, and concurrent service calls preserve counters.
-- ARM64, RISC-V64 and Cortex-M freestanding host/host-services archives build without
-  std, alloc or 64-bit atomic requirements. Not board execution or final linkage.
+| Gate | Implementation / evidence producer |
+| --- | --- |
+| Native VM and host replacement | C ABI tests, GC negative/positive controls, Linux x64/ARM64 |
+| Clocks, sleep, yield | Linux, immutable host tables, real WASIp1 clock/error tests |
+| Events, recursive locks, threads, TLS, stacks, barriers | Linux and host-kernel contracts; native runtime/GC source adapters |
+| Native source builds | Both WorkstationGC and ServerGC archives; actual x64/ARM64 execution without --wrap |
+| GC roots/EH/thread/finalizer interaction | Concurrent managed stress, pinned/weak roots, filters/rethrow/finally, exact finalizers, native-thread callbacks |
+| Low-memory recovery | Effective 128 MiB limit asserted; three exhaustion/recovery waves per regular backend and collector |
+| Injected failure recovery | Test-only fail-before-side-effect VM commit; exactly one hit observed by actual GC, then recovery |
+| Measured overhead | Alternating baseline/candidate workload trials, wall/CPU/RSS and file size reports |
+| Linear storage contracts | Separate capability, invalid geometry/exhaustion/reuse/neighbor/concurrency tests |
+| Managed WASIp1 | Audited LLVM compiler, real C# GC/roots/exception workload, observer-only negative/positive controls |
+| WASI source build | Audited native LLVM runtime rebuilt, digest checked, executed without linker wrappers |
+| Mixed-language ASan | Rust/core and C/C++ boundary code instrumented together with leak checking |
+| Dependency inventory | Actual runtime/PAL unresolved symbols plus executable imports, retaining unknowns and bypasses |
+| Servicing policy | Version/digest guards and documented mandatory re-audit/qualification on upgrades |
 
-Workflow conclusions/logs for the exact commit determine which gates passed.
-A configured test is not evidence of a successful execution.
+The workflows `boundary-validation`, `llvm-managed-validation` and
+`boundary-sanitizers` must all succeed at the candidate revision. The source-bundle
+and developer-input workflows are convenience artifacts, not qualification gates.
+A completed table row is not a claim that every method in its subsystem uses Rust.
 
-## Remaining product qualification
+## What is NOT complete
 
-1. Inventory OS dependencies for a selected runtime profile; route synchronization,
-   threads/TLS, suspension, EH and required BCL shims through audited capabilities.
-2. Adapt a managed GC/runtime for linear memory, including memory limits, roots,
-   metadata and allocation failure. Wasm boundary tests do not supply codegen.
-3. Add sustained/low-memory/GC fault-injection and finalizer stress, and failure
-   diagnosis across supported runtime configurations (not only workstation GC).
-4. Audit ownership, startup/reentry and pointer lifetimes; geometry checks cannot
-   make foreign pointers safe or detect ABA/reuse of released addresses.
-5. Measure workload overhead, code size, memory pressure and contention. Counters
-   add runtime cost. The bounded 8 MiB arena is a validation profile, not a general
-   runtime heap. Clock accuracy and sleep wakeup latency remain host-dependent.
-6. Define servicing and re-audit upstream pins. .NET 10.0.0 and Rust 1.85.1 are
-   research reproducibility pins, not production deployment recommendations.
+1. **Whole-runtime OS isolation.** Current native archive inventories still expose
+   direct OS references outside the boundary. These include signal/context and
+   activation handling, module inspection/loading, environment and CPU/memory
+   topology, crash-dump/diagnostic I/O and native allocation. The strict
+   `audit_dependencies.py --require-isolated` gate is expected to reject this
+   state. A successful reporting run must not be described as an isolation pass.
+2. **All BCL native dependencies.** File, network, cryptography, process and other
+   native shims have not all been rerouted to a platform-independent callback
+   surface. Existing Linux or WASI services remain dependencies of the tested
+   configurations. This is not a replacement for a complete target runtime pack.
+3. **Arbitrary targets and execution models.** Freestanding ARM64/RISC-V/Cortex-M
+   tests build the boundary only. Device linkage/startup, target code generation,
+   exception/unwind metadata, register-context/stack-map adaptation, hardware fault
+   behavior and packaging remain target-port obligations. Existing NativeAOT
+   implementations are reused on the validated targets, not replaced by Rust.
+4. **Additional Wasm profiles.** The managed test is single-threaded WASIp1 with
+   eager, bounded storage. Shared-memory threads, WASIp2 components, browser APIs,
+   WebAssembly-GC reference objects and dynamically growing managed arenas are
+   not implemented or qualified here. Managed WASI OOM/finalizer qualification
+   does not yet match the wider native suite.
+5. **Product qualification.** A maintained upstream release must be selected and
+   re-audited, the actual application's needed BCL surface must be tested, and
+   longer deployment-specific stress/performance/security qualification is needed.
+   The recorded finite tests and ASan runs cannot establish absence of every race,
+   undefined behavior or security vulnerability. No production support is claimed.
 
-Not covered: shared-memory Wasm, WASIp2 components, WebAssembly GC reference
-objects, full runtime/ABI/codegen adaptation, interrupt safety, sandboxing of
-untrusted C callers, or certification of any platform.
+Do not close these items by renaming them, suppressing tests, returning success
+from unsupported operations, or relabeling an archive cross-build as execution.
+See [qualification](qualification.md), [architecture](architecture.md) and
+[servicing](servicing.md) for precise contracts and reproduction commands.
