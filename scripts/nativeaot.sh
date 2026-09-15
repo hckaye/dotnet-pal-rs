@@ -15,24 +15,19 @@ python3 integration/dotnet10/symbols.py --props artifacts/wrap.props
 project=samples/GcProbe/GcProbe.csproj
 dotnet restore "$project" -r "$rid"
 cargo build --release
-# Clear environment configuration that could silently select a different GC path.
-export DOTNET_GCServer=0 DOTNET_GCLargePages=0
+export DOTNET_GCServer=0 DOTNET_gcServer=0 DOTNET_GCLargePages=0
 export COMPlus_gcServer=0 COMPlus_GCLargePages=0
-
-# Baseline links the same observer and Rust archive but does NOT wrap any GC symbol.
+# RhConfig at the pinned NativeAOT revision accepts hex digits, NOT a 0x prefix.
+# Scope limits to the tested processes; do not constrain the compiler heap.
 dotnet publish "$project" -r "$rid" -c Release -p:PalWrap=false -o artifacts/baseline
-DOTNET_GCHeapHardLimit=0x20000000 ./artifacts/baseline/GcProbe baseline
-# Force relink: properties imported only by the linker are not reliable incremental inputs.
+DOTNET_GCHeapHardLimit=20000000 timeout 120s ./artifacts/baseline/GcProbe baseline
 rm -rf samples/GcProbe/obj/Release samples/GcProbe/bin/Release
 dotnet publish "$project" -r "$rid" -c Release -p:PalWrap=true -o artifacts/wrapped
-DOTNET_GCHeapHardLimit=0x20000000 ./artifacts/wrapped/GcProbe wrapped
-
-# Same managed program and same NativeAOT adapter, but replace Linux Rust backend
-# with the no_std host-callback backend. Linux C callbacks stand in for an SDK here.
+DOTNET_GCHeapHardLimit=20000000 timeout 120s ./artifacts/wrapped/GcProbe wrapped
 cargo build --release --no-default-features --features host --target-dir target/host
 cc -std=c11 -O2 -fPIC -Iinclude -c tests/host_backend.c -o artifacts/host_backend.o
 rm -rf samples/GcProbe/obj/Release samples/GcProbe/bin/Release
 dotnet publish "$project" -r "$rid" -c Release -p:PalWrap=true \
   -p:PalLib="$PWD/target/host/release/libdotnet_pal_rs.a" \
   -p:PalHostObject="$PWD/artifacts/host_backend.o" -o artifacts/host-wrapped
-DOTNET_GCHeapHardLimit=0x20000000 ./artifacts/host-wrapped/GcProbe wrapped
+DOTNET_GCHeapHardLimit=20000000 timeout 120s ./artifacts/host-wrapped/GcProbe wrapped

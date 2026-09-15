@@ -12,7 +12,8 @@ clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -DPAL_FAULT_PROVIDER -c tests/qua
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/host_fault_backend.c -o artifacts/host_fault.o
 clang -r artifacts/host_fault.o artifacts/services_host.o artifacts/kernel_host.o -o artifacts/host_fault_all.o
 export DOTNET_GCLargePages=0 COMPlus_GCLargePages=0
-export DOTNET_GCHeapHardLimit=0x08000000
+# RhConfig parses hex digits only; 0x-prefixed values are rejected silently upstream.
+# Apply the cap to child probes only, not the compiler process.
 export DOTNET_GCHeapCount=2 COMPlus_GCHeapCount=2
 for profile in workstation server; do
   server=false; gc=0
@@ -43,17 +44,18 @@ for profile in workstation server; do
       echo 'Qualification must not use --wrap' >&2; exit 1
     fi
     if [[ "$backend" == fault ]]; then
-      timeout 180s "$output/GcProbe" qualify fault "$profile" | tee "$output/fault.log"
+      DOTNET_GCHeapHardLimit=08000000 timeout 180s "$output/GcProbe" qualify fault "$profile" | tee "$output/fault.log"
     else
       mode=source-kernel
       [[ "$backend" != baseline ]] || mode=baseline
-      DOTNET_GCHeapHardLimit=0x20000000 timeout 180s "$output/GcProbe" "$mode" | tee "$output/observer.log"
-      PAL_STRESS_SECONDS="${PAL_STRESS_SECONDS:-10}" timeout 240s "$output/GcProbe" qualify stress "$profile" | tee "$output/stress.log"
-      timeout 180s "$output/GcProbe" qualify oom "$profile" | tee "$output/oom.log"
+      DOTNET_GCHeapHardLimit=20000000 timeout 180s "$output/GcProbe" "$mode" | tee "$output/observer.log"
+      PAL_STRESS_SECONDS="${PAL_STRESS_SECONDS:-10}" DOTNET_GCHeapHardLimit=08000000 \
+        timeout 240s "$output/GcProbe" qualify stress "$profile" | tee "$output/stress.log"
+      DOTNET_GCHeapHardLimit=08000000 timeout 180s "$output/GcProbe" qualify oom "$profile" | tee "$output/oom.log"
     fi
   done
   for backend in linux host; do
-    python3 scripts/benchmark.py \
+    DOTNET_GCHeapHardLimit=08000000 python3 scripts/benchmark.py \
       --baseline "artifacts/qualification/$profile-baseline/GcProbe" \
       --candidate "artifacts/qualification/$profile-$backend/GcProbe" \
       --profile "$profile" --trials 3 \

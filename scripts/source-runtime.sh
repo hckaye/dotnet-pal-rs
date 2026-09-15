@@ -10,10 +10,12 @@ case "$(uname -m)" in x86_64) arch=x64;; aarch64) arch=arm64;; *) exit 2;; esac
 mkdir -p artifacts
 python3 integration/dotnet10/patch_runtime.py "$runtime" --check
 python3 integration/dotnet10/patch_runtime.py "$runtime"
-# Compiler/BCL remain the matching published artifacts. Both GC native variants
-# are rebuilt from the pinned source, with the source adapter compiled in.
-"$runtime/src/coreclr/build-runtime.sh" -release -arch "$arch" -component nativeaot -ninja \
-  -cmakeargs "-DDOTNET_PAL_ROOT=$root" 2>&1 | tee artifacts/source-build.log
+# Keep the complete build log as evidence; surface the diagnostic tail on failure.
+if ! "$runtime/src/coreclr/build-runtime.sh" -release -arch "$arch" -component nativeaot -ninja \
+  -cmakeargs "-DDOTNET_PAL_ROOT=$root" > artifacts/source-build.log 2>&1; then
+  tail -n 100 artifacts/source-build.log; exit 1
+fi
+tail -n 12 artifacts/source-build.log
 bash scripts/nativeaot.sh
 original=$(python3 -c 'from pathlib import Path; print(Path("artifacts/runtime-archive.txt").read_text(encoding="utf-8-sig").strip())')
 overlay="$root/artifacts/source-sdk"
