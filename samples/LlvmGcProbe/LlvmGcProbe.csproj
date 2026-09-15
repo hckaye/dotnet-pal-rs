@@ -8,12 +8,19 @@
     <IlcLlvmExceptionHandlingModel>emulated</IlcLlvmExceptionHandlingModel>
     <IlcTreatWarningsAsErrors>true</IlcTreatWarningsAsErrors>
     <PalRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))</PalRoot>
+    <PalWrap Condition="'$(PalWrap)' == ''">false</PalWrap>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.DotNet.ILCompiler.LLVM" Version="10.0.0-rc.1.26357.1" />
     <PackageReference Include="runtime.linux-x64.Microsoft.DotNet.ILCompiler.LLVM" Version="10.0.0-rc.1.26357.1" />
+    <DirectPInvoke Include="__Internal" />
+    <NativeLibrary Include="$(PalRoot)/artifacts/llvm/p1_error_text.o" />
+    <NativeLibrary Include="$(PalObserverObject)" />
+    <NativeLibrary Include="$(PalRoot)/target/wasm32-wasip1/release/libdotnet_pal_rs.a" />
   </ItemGroup>
-  <Target Name="RecordCompilerRuntime" BeforeTargets="LinkNativeLlvm">
+  <Import Project="../../artifacts/llvm/wrap.props" Condition="'$(PalWrap)' == 'true'" />
+  <Target Name="RecordCompilerRuntime" BeforeTargets="LinkNativeLlvm" DependsOnTargets="SetupOSSpecificProps">
     <WriteLinesToFile File="$(PalRoot)/artifacts/llvm/runtime-archive.txt" Lines="$(IlcSdkPath)libPortableRuntime.a" Overwrite="true" />
+    <Exec Command="python3 &quot;$(PalRoot)/integration/llvm-wasi/symbols.py&quot; --runtime &quot;$(IlcSdkPath)libPortableRuntime.a&quot; --nm &quot;$(WASI_SDK_PATH)/bin/llvm-nm&quot;" />
   </Target>
 </Project>

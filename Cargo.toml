@@ -14,6 +14,8 @@ default = ["linux"]
 linux = ["dep:libc"]
 host = []
 linear = []
+# Explicit bounded managed-heap experiment; the default boundary arena stays 8 MiB.
+linear-gc = ["linear"]
 host-services = ["host"]
 host-kernel = ["host-services"]
 wasi-clock = ["linear"]
@@ -26,6 +28,5 @@ panic = "abort"
 
 [profile.release]
 panic = "abort"
-# Keep native objects usable by the target linker, without Rust LLVM bitcode LTO.
 lto = false
 codegen-units = 1

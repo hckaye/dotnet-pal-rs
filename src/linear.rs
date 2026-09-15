@@ -4,8 +4,11 @@
 use crate::{OK, INVALID_ARGUMENT, OUT_OF_MEMORY};
 use core::{cell::UnsafeCell, ffi::c_void, hint, sync::atomic::{AtomicBool, Ordering}};
 
-pub const GRANULARITY: usize = 4096; // allocation unit, NOT the Wasm memory page size
+pub const GRANULARITY: usize = 4096;
+#[cfg(not(feature = "linear-gc"))]
 pub const CAPACITY: usize = 8 * 1024 * 1024;
+#[cfg(feature = "linear-gc")]
+pub const CAPACITY: usize = 256 * 1024 * 1024;
 const BLOCKS: usize = CAPACITY / GRANULARITY;
 const TAIL: usize = usize::MAX;
 #[repr(C, align(65536))]
@@ -32,7 +35,6 @@ impl Guard {
         Self
     }
     fn slots(&mut self) -> &mut [usize; BLOCKS] {
-        // SAFETY: Guard uniquely owns the metadata lock. Payload is a separate cell.
         unsafe { &mut *ARENA.slots.get() }
     }
 }
@@ -55,7 +57,6 @@ pub unsafe fn allocate(size: usize, alignment: usize, out: *mut *mut c_void) -> 
             None => {
                 slots[first] = count;
                 slots[first + 1..first + count].fill(TAIL);
-                // Clear reused storage before transferring ownership to the caller.
                 unsafe { address.write_bytes(0, size); out.write(address.cast()); }
                 return OK;
             }
@@ -71,7 +72,6 @@ pub unsafe fn release(address: *mut c_void, size: usize) -> u32 {
     let mut guard = Guard::acquire();
     let slots = guard.slots();
     let count = slots[first];
-    // A stale pointer reused for another allocation cannot be detected: caller contract.
     if count == 0 || count == TAIL || count != size / GRANULARITY { return INVALID_ARGUMENT; }
     slots[first..first + count].fill(0);
     OK
@@ -90,7 +90,6 @@ pub unsafe fn zero(address: *mut c_void, size: usize) -> u32 {
     }
     let count = slots[first];
     if count == 0 || end > (first + count) * GRANULARITY { return INVALID_ARGUMENT; }
-    // Use a pointer derived from the arena allocation, not a reconstructed address.
     unsafe { base().add(offset).write_bytes(0, size) };
     OK
 }
@@ -100,9 +99,5 @@ pub unsafe fn abort() -> ! {
     #[cfg(target_arch = "wasm32")]
     core::arch::wasm32::unreachable();
     #[cfg(not(target_arch = "wasm32"))]
-    {
-        // Freestanding policy: halt. Embedders requiring a platform reset/fatal log
-        // should use the host backend. There is intentionally no libc dependency.
-        loop { hint::spin_loop(); }
-    }
+    loop { hint::spin_loop(); }
 }
