@@ -14,8 +14,8 @@ clang++ -std=c++17 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -
 python3 integration/dotnet10/symbols.py --props artifacts/wrap.props
 project=samples/GcProbe/GcProbe.csproj
 dotnet restore "$project" -r "$rid"
-python3 integration/dotnet10/symbols.py --check-runtime \
-  "${NUGET_PACKAGES:-$HOME/.nuget/packages}/runtime.$rid.microsoft.dotnet.ilcompiler/10.0.0/sdk"
+python3 integration/dotnet10/symbols.py \
+  --assets samples/GcProbe/obj/project.assets.json --rid "$rid"
 cargo build --release
 # Clear environment configuration that could silently select a different GC path.
 export DOTNET_GCServer=0 DOTNET_GCLargePages=0

@@ -25,14 +25,17 @@ jobs:
       - name: Native prerequisites
         run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev binutils
       - name: Boundary and adapter tests
+        id: boundary
         run: bash scripts/check.sh
       - name: Actual NativeAOT GC negative and positive controls
         run: bash scripts/nativeaot.sh
       - name: Freestanding ARM64 compile (not console execution)
+        if: ${{ !cancelled() && steps.boundary.outcome == 'success' }}
         run: |
           rustup target add aarch64-unknown-none
           cargo build --release --no-default-features --features host --target aarch64-unknown-none
       - uses: actions/checkout@v4
+        if: ${{ !cancelled() && steps.boundary.outcome == 'success' }}
         with:
           repository: dotnet/runtime
           ref: 60629d14374c56f1cb51819049ad1fa529307f8d
@@ -42,6 +45,7 @@ jobs:
             /src/coreclr/gc/unix/gcenv.unix.cpp
             /src/coreclr/nativeaot/Runtime/CMakeLists.txt
       - name: Validate source-patch applicability, not a runtime source build
+        if: ${{ !cancelled() && steps.boundary.outcome == 'success' }}
         run: |
           python3 integration/dotnet10/patch_runtime.py artifacts/runtime --check
           python3 integration/dotnet10/patch_runtime.py artifacts/runtime
