@@ -12,7 +12,7 @@ public:
         if (dotnet_pal_kernel::require()->event_destroy(m_handle) != DOTNET_PAL_OK) return false;
         m_handle = nullptr; return true;
     }
-    uint32_t Wait(uint32_t milliseconds, bool alertable) {
+    uint32_t Wait(uint32_t milliseconds, bool alertable = false) {
         (void)alertable;
         return dotnet_pal_kernel::wait_ms(m_handle, milliseconds);
     }

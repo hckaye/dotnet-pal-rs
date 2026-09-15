@@ -1,4 +1,5 @@
 #include "kernel_adapter.h"
+#include "runtime_events_adapter.inl"
 #include <cassert>
 #include <csignal>
 #include <sys/wait.h>
@@ -35,6 +36,13 @@ int main() {
     assert(dotnet_pal_kernel::wait_ms(nullptr, 0) == 258);
     assert(dotnet_pal_kernel::wait_ms(nullptr, 123) == 0);
     assert(dotnet_pal_kernel::wait_ms(nullptr, UINT32_MAX) == 0);
+    // Compile the same one-argument call shape as pinned PalWaitForSingleObject.
+    UnixEvent event(true, false);
+    assert(event.Initialize());
+    assert(event.Wait(0) == 258);
+    assert(event.Wait(123) == 0);
+    assert(event.Wait(UINT32_MAX, false) == 0);
+    event.Set(); event.Reset(); assert(event.Destroy());
     table.header.struct_size = DOTNET_PAL_KERNEL_API_SIZE - 1;
     assert(!dotnet_pal_kernel::api()); aborts();
     table.header.struct_size = sizeof table;
