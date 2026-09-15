@@ -22,6 +22,8 @@ CALLS = {
     "VirtualReserveAndCommitLargePages": "dotnet_pal_gc::large_pages(size, node)",
 }
 
+HELPERS = ("VirtualReserveInner", "VirtualCommitInner")
+
 def patch_gc(text):
     if MARKER in text:
         raise ValueError("source is already patched")
@@ -33,6 +35,12 @@ def patch_gc(text):
         if len(list(regex.finditer(text))) != 1:
             raise ValueError(f"expected exactly one pinned definition of {name}")
         text = regex.sub(lambda m: m[1] + f"#ifdef {MARKER}\n    return {call};\n#else\n" + m[2] + "#endif\n" + m[3], text)
+    # These helpers otherwise become unused under -Werror in the source build.
+    for name in HELPERS:
+        regex = re.compile(rf"^static (?:void\*|bool) {name}\([^\n]*\)\n\{{\n.*?^\}}", re.DOTALL | re.MULTILINE)
+        if len(list(regex.finditer(text))) != 1:
+            raise ValueError(f"expected exactly one pinned helper {name}")
+        text = regex.sub(lambda m: f"#ifndef {MARKER}\n" + m[0] + "\n#endif", text)
     return f'#ifdef {MARKER}\n#include "gc_vm_adapter.h"\n#endif\n\n' + text
 
 def main():

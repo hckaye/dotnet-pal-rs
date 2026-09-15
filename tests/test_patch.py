@@ -9,11 +9,14 @@ spec.loader.exec_module(patch)
 
 class PatchTests(unittest.TestCase):
     def fixture(self):
-        return "\n".join(f"bool GCToOSInterface::{name}(void)\n{{\n    return false;\n}}\n" for name in patch.CALLS)
+        functions = "\n".join(f"bool GCToOSInterface::{name}(void)\n{{\n    return false;\n}}\n" for name in patch.CALLS)
+        helpers = "\n".join(f"static bool {name}(void)\n{{\n    return true;\n}}\n" for name in patch.HELPERS)
+        return helpers + functions
 
     def test_six_guarded_replacements(self):
         result = patch.patch_gc(self.fixture())
         self.assertEqual(result.count("#else"), 6)
+        self.assertEqual(result.count("#ifndef DOTNET_PAL_GC_VM"), 2)
         self.assertEqual(result.count("return dotnet_pal_gc::"), 6)
         self.assertEqual(result.count("return false;"), 6)
 

@@ -21,4 +21,9 @@
     <NativeLibrary Include="$(PalHostObject)" Condition="'$(PalHostObject)' != ''" />
   </ItemGroup>
   <Import Project="../../artifacts/wrap.props" Condition="'$(PalWrap)' == 'true'" />
+  <!-- Audit the actual link input, including SDK-managed pack locations. -->
+  <Target Name="PalAuditRuntime" BeforeTargets="LinkNative" DependsOnTargets="SetupOSSpecificProps">
+    <Error Condition="'$(RuntimeFrameworkVersion)' != '10.0.0'" Text="This probe requires runtime 10.0.0" />
+    <Exec Command="python3 &quot;$(PalRoot)/integration/dotnet10/symbols.py&quot; --runtime &quot;$(IlcSdkPath)$(FullRuntimeName).a&quot;" />
+  </Target>
 </Project>

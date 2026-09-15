@@ -14,21 +14,18 @@ clang++ -std=c++17 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -
 python3 integration/dotnet10/symbols.py --props artifacts/wrap.props
 project=samples/GcProbe/GcProbe.csproj
 dotnet restore "$project" -r "$rid"
-python3 integration/dotnet10/symbols.py \
-  --assets samples/GcProbe/obj/project.assets.json --rid "$rid"
 cargo build --release
 # Clear environment configuration that could silently select a different GC path.
 export DOTNET_GCServer=0 DOTNET_GCLargePages=0
 export COMPlus_gcServer=0 COMPlus_GCLargePages=0
-export DOTNET_GCHeapHardLimit=0x20000000
 
 # Baseline links the same observer and Rust archive but does NOT wrap any GC symbol.
 dotnet publish "$project" -r "$rid" -c Release -p:PalWrap=false -o artifacts/baseline
-./artifacts/baseline/GcProbe baseline
+DOTNET_GCHeapHardLimit=0x20000000 ./artifacts/baseline/GcProbe baseline
 # Force relink: properties imported only by the linker are not reliable incremental inputs.
 rm -rf samples/GcProbe/obj/Release samples/GcProbe/bin/Release
 dotnet publish "$project" -r "$rid" -c Release -p:PalWrap=true -o artifacts/wrapped
-./artifacts/wrapped/GcProbe wrapped
+DOTNET_GCHeapHardLimit=0x20000000 ./artifacts/wrapped/GcProbe wrapped
 
 # Same managed program and same NativeAOT adapter, but replace Linux Rust backend
 # with the no_std host-callback backend. Linux C callbacks stand in for an SDK here.
@@ -38,4 +35,4 @@ rm -rf samples/GcProbe/obj/Release samples/GcProbe/bin/Release
 dotnet publish "$project" -r "$rid" -c Release -p:PalWrap=true \
   -p:PalLib="$PWD/target/host/release/libdotnet_pal_rs.a" \
   -p:PalHostObject="$PWD/artifacts/host_backend.o" -o artifacts/host-wrapped
-./artifacts/host-wrapped/GcProbe wrapped
+DOTNET_GCHeapHardLimit=0x20000000 ./artifacts/host-wrapped/GcProbe wrapped

@@ -1,36 +1,28 @@
 import importlib.util
-import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 path = Path(__file__).resolve().parents[1] / "integration/dotnet10/symbols.py"
 spec = importlib.util.spec_from_file_location("symbols", path)
 symbols = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(symbols)
 
-class PackageTests(unittest.TestCase):
-    def test_sdk_package_download_and_custom_cache(self):
+class ArchiveTests(unittest.TestCase):
+    def test_exact_sdk_link_input(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            name = "Microsoft.NETCore.App.Runtime.NativeAOT.linux-arm64"
-            archive = root / "cache" / name.lower() / "10.0.0" / "runtimes/linux-arm64/native/sdk/libRuntime.WorkstationGC.a"
+            archive = Path(directory) / "sdk-pack" / "10.0.0" / "native/libRuntime.WorkstationGC.a"
             archive.parent.mkdir(parents=True)
             archive.touch()
-            assets = root / "project.assets.json"
-            assets.write_text(json.dumps({
-                "packageFolders": {str(root / "cache"): {}},
-                "project": {"frameworks": {"net10.0": {"downloadDependencies": [
-                    {"name": name, "version": "[10.0.0, 10.0.0]"}
-                ]}}}
-            }))
-            self.assertEqual(symbols.runtime_archives(assets, "linux-arm64"), [archive])
+            with patch.object(symbols, "defined", return_value=set(symbols.SYMBOLS)):
+                symbols.audit_runtime(archive)
+            with patch.object(symbols, "defined", return_value=set(symbols.SYMBOLS[1:])):
+                with self.assertRaises(SystemExit):
+                    symbols.audit_runtime(archive)
 
-    def test_wrong_version_is_not_silently_accepted(self):
-        with tempfile.TemporaryDirectory() as directory:
-            assets = Path(directory) / "project.assets.json"
-            assets.write_text(json.dumps({"libraries": {
-                "runtime.linux-x64.microsoft.dotnet.ilcompiler/10.0.1": {"type": "package"}
-            }}))
-            with self.assertRaises(SystemExit):
-                symbols.runtime_archives(assets, "linux-x64")
+    def test_wrong_version_or_missing_archive(self):
+        with self.assertRaises(SystemExit):
+            symbols.audit_runtime(Path("10.0.1/libRuntime.WorkstationGC.a"))
+        with self.assertRaises(SystemExit):
+            symbols.audit_runtime(Path("missing/10.0.0/libRuntime.WorkstationGC.a"))
