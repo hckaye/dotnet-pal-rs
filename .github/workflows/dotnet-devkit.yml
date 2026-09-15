@@ -1,0 +1,41 @@
+name: dotnet-devkit
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/dotnet-devkit.yml']
+permissions:
+  contents: read
+jobs:
+  inputs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: dotnet/runtime
+          ref: 60629d14374c56f1cb51819049ad1fa529307f8d
+          path: artifacts/upstream
+          persist-credentials: false
+      - name: Download and restore public pinned tools, without credential files
+        shell: bash
+        env:
+          NUGET_PACKAGES: ${{ runner.temp }}/packages
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/devkit "$RUNNER_TEMP/dotnet"
+          curl --fail --location --retry 3 --max-time 300 https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.100/dotnet-sdk-10.0.100-linux-x64.tar.gz -o artifacts/devkit/dotnet-sdk.tar.gz
+          tar -xzf artifacts/devkit/dotnet-sdk.tar.gz -C "$RUNNER_TEMP/dotnet"
+          "$RUNNER_TEMP/dotnet/dotnet" restore samples/GcProbe/GcProbe.csproj -r linux-x64 -p:PalWrap=false
+          tar -czf artifacts/devkit/packages.tar.gz -C "$NUGET_PACKAGES" .
+          git -C artifacts/upstream archive --format=tar.gz --prefix=runtime/ HEAD > artifacts/devkit/runtime-source.tar.gz
+          git -C artifacts/upstream rev-parse HEAD > artifacts/devkit/runtime-revision.txt
+          sha256sum artifacts/devkit/*.tar.gz > artifacts/devkit/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-public-build-inputs
+          path: artifacts/devkit/
+          retention-days: 3
+          if-no-files-found: error
