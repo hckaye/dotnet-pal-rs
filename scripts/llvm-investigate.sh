@@ -4,13 +4,17 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 root="$PWD"
 mkdir -p artifacts/llvm
+exec > >(tee artifacts/llvm/driver.log) 2>&1
 : "${WASI_SDK_PATH:?provide the verified WASI SDK}"
 : "${NUGET_PACKAGES:?provide an isolated package cache}"
 export MSBuildEnableWorkloadResolver=false
 project=samples/LlvmGcProbe/LlvmGcProbe.csproj
 cargo build --release --no-default-features --features linear-gc,wasi-clock --target wasm32-wasip1
 cc="$WASI_SDK_PATH/bin/clang"; cxx="$WASI_SDK_PATH/bin/clang++"
-"$cc" --target=wasm32-unknown-wasip1 -std=c11 -O2 -Wall -Wextra -Werror -c integration/llvm-wasi/p1_error_text.c -o artifacts/llvm/p1_error_text.o
+# This PURE formatter must use the P2 SDK's error constants, matching the published
+# System.Native archive. It performs no OS calls or P2 imports. The P1 SDK has no
+# netdb.h. The final module's import audit still rejects every non-P1 dependency.
+"$cc" --target=wasm32-unknown-wasip2 -std=c11 -O2 -Wall -Wextra -Werror -c integration/llvm-wasi/p1_error_text.c -o artifacts/llvm/p1_error_text.o
 for mode in baseline wrapped; do
   extra=()
   [[ "$mode" != baseline ]] || extra=(-DDOTNET_PAL_OBSERVER_ONLY)
