@@ -1,0 +1,18 @@
+[package]
+name = "dotnet-pal-wasm-arena"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+test = false
+doctest = false
+
+[dependencies]
+dotnet-pal-rs = { path = "../..", default-features = false, features = ["arena"] }
+
+[profile.release]
+panic = "abort"
+lto = false
+codegen-units = 1

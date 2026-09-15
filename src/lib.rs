@@ -3,21 +3,28 @@
 //! A versioned, allocation-free C boundary. Only the GC VM slice is implemented.
 //! Pointer ownership, readable output storage and synchronization are caller contracts.
 
-#[cfg(all(feature = "linux", feature = "host"))]
-compile_error!("select exactly one backend: linux OR host");
-#[cfg(not(any(feature = "linux", feature = "host")))]
-compile_error!("select a backend: linux OR host");
+#[cfg(any(all(feature = "linux", feature = "host"), all(feature = "linux", feature = "arena"), all(feature = "host", feature = "arena")))]
+compile_error!("select exactly one backend: linux OR host OR arena");
+#[cfg(not(any(feature = "linux", feature = "host", feature = "arena")))]
+compile_error!("select a backend: linux OR host OR arena");
 #[cfg(all(feature = "linux", not(target_os = "linux")))]
 compile_error!("the linux backend supports Linux only; use host for SDK targets");
-#[cfg(not(target_has_atomic = "64"))]
-compile_error!("this prototype requires native 64-bit atomics for diagnostic counters");
+#[cfg(all(feature = "arena", not(target_arch = "wasm32")))]
+compile_error!("the reference arena backend is restricted to single-threaded wasm32");
+#[cfg(all(feature = "arena", target_feature = "atomics"))]
+compile_error!("the arena backend must not be built for shared-memory/atomic WASM");
 
-use core::{ffi::c_void, mem, ptr, sync::atomic::{AtomicU64, Ordering}};
+use core::{ffi::c_void, mem, ptr, sync::atomic::Ordering};
+mod counters;
+use counters::Counter as AtomicU64;
 #[cfg(feature = "linux")]
 #[path = "linux.rs"]
 mod backend;
 #[cfg(all(feature = "host", not(feature = "linux")))]
 #[path = "host.rs"]
+mod backend;
+#[cfg(feature = "arena")]
+#[path = "arena.rs"]
 mod backend;
 
 pub const ABI_VERSION: u32 = 2;
@@ -25,7 +32,11 @@ pub const OK: u32 = 0;
 pub const UNSUPPORTED: u32 = 1;
 pub const INVALID_ARGUMENT: u32 = 2;
 pub const OS_ERROR: u32 = 3;
+// CAP_VM retains its original native, inaccessible-reservation contract.
 pub const CAP_VM: u64 = 1;
+pub const CAP_VM_LINEAR: u64 = 1 << 1;
+pub const CAP_ZERO_RECOMMIT: u64 = 1 << 2;
+pub const CAP_STATS: u64 = 1 << 3;
 
 // Integers, not Rust enums, cross the ABI. Unknown values can be rejected safely.
 pub type Reserve = unsafe extern "C" fn(usize, usize, u32, *mut *mut c_void) -> u32;
@@ -138,6 +149,8 @@ unsafe extern "C" fn read_stats(out: *mut Stats, size: usize) -> u32 {
     if out.is_null() || size < mem::size_of::<Stats>() || (out as usize) % mem::align_of::<Stats>() != 0 {
         return INVALID_ARGUMENT;
     }
+    // Diagnostics must not be a portability prerequisite or fake zero activity.
+    if !cfg!(target_has_atomic = "64") { return UNSUPPORTED; }
     // Diagnostic snapshots are per-counter atomic, not a transactional snapshot.
     unsafe { out.write(Stats {
         reserve_ok: RESERVE.load(Ordering::Relaxed),
@@ -151,7 +164,13 @@ unsafe extern "C" fn read_stats(out: *mut Stats, size: usize) -> u32 {
 }
 
 static API: Api = Api {
-    header: Header { abi_version: ABI_VERSION, struct_size: mem::size_of::<Api>() as u32, capabilities: CAP_VM },
+    header: Header {
+        abi_version: ABI_VERSION,
+        struct_size: mem::size_of::<Api>() as u32,
+        capabilities: (if cfg!(feature = "arena") { CAP_VM_LINEAR } else { CAP_VM })
+            | CAP_ZERO_RECOMMIT
+            | (if cfg!(target_has_atomic = "64") { CAP_STATS } else { 0 }),
+    },
     vm: VmOps {
         page_size: Some(page_size), reserve: Some(reserve), commit: Some(commit),
         decommit: Some(decommit), release: Some(release), reset: Some(reset),
@@ -159,11 +178,24 @@ static API: Api = Api {
     read_stats: Some(read_stats),
 };
 
-/// The only runtime-facing PAL entry point. Valid before managed runtime startup.
+/// The single runtime-facing entry point. Check capabilities, not just ABI version.
+/// The arena profile requires host initialization before this returns a table.
 #[no_mangle]
 pub extern "C" fn dotnet_pal_get_api(version: u32) -> *const Api {
     if version != ABI_VERSION || !backend::page_size().is_power_of_two() { return ptr::null(); }
     &API
+}
+
+/// Initialize the reference linear arena before any managed runtime starts.
+///
+/// # Safety
+/// The memory is exclusive, writable, nonmoving and lives for the WASM instance.
+/// It must not overlap code/data/stack/allocator storage or PAL metadata. Calls
+/// must be serialized and non-reentrant; the instance memory must NOT be shared.
+#[cfg(feature = "arena")]
+#[no_mangle]
+pub unsafe extern "C" fn dotnet_pal_arena_init(base: *mut c_void, size: usize, page: usize) -> u32 {
+    unsafe { backend::initialize(base, size, page) }
 }
 
 #[cfg(not(test))]
@@ -187,4 +219,10 @@ mod tests {
     }
     #[test]
     fn negotiation_rejects_unknown_version() { assert!(dotnet_pal_get_api(99).is_null()); }
+    #[test]
+    fn native_and_linear_capabilities_do_not_alias() {
+        assert_eq!(CAP_VM & CAP_VM_LINEAR, 0);
+        assert_eq!(API.header.capabilities & CAP_ZERO_RECOMMIT, CAP_ZERO_RECOMMIT);
+        assert_eq!(API.header.capabilities & CAP_VM, CAP_VM);
+    }
 }

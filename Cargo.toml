@@ -13,6 +13,8 @@ crate-type = ["staticlib", "rlib"]
 default = ["linux"]
 linux = ["dep:libc"]
 host = []
+# Single-threaded, non-shared WASM reference implementation, not native VM.
+arena = []
 
 [dependencies]
 libc = { version = "=0.2.169", default-features = false, optional = true }

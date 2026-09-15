@@ -1,0 +1,29 @@
+name: wasm-boundary
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linear-memory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Pinned Rust cross targets
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal
+          rustup target add --toolchain 1.85.1 wasm32-unknown-unknown wasm32v1-none wasm32-wasip1 aarch64-unknown-none
+      - name: Same ABI on actual WASM instances
+        run: bash scripts/wasm.sh
+      - name: Host boundary compile checks (not runtime ports)
+        run: |
+          cargo +1.85.1 check --no-default-features --features host --target wasm32-wasip1
+          cargo +1.85.1 check --no-default-features --features host --target aarch64-unknown-none
+      - name: Native GC must refuse a linear-memory profile
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Inative tests/linear_rejected.cpp -o /tmp/linear-rejected
+          /tmp/linear-rejected

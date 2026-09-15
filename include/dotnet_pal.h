@@ -6,7 +6,12 @@
 extern "C" {
 #endif
 #define DOTNET_PAL_ABI_VERSION 2u
+/* Native VM: inaccessible reserve/decommit and concurrent disjoint operations. */
 #define DOTNET_PAL_CAP_VM UINT64_C(1)
+/* Logical linear-memory profile, NOT native VM/page-protection semantics. */
+#define DOTNET_PAL_CAP_VM_LINEAR (UINT64_C(1) << 1)
+#define DOTNET_PAL_CAP_ZERO_RECOMMIT (UINT64_C(1) << 2)
+#define DOTNET_PAL_CAP_STATS (UINT64_C(1) << 3)
 #define DOTNET_PAL_OK 0u
 #define DOTNET_PAL_UNSUPPORTED 1u
 #define DOTNET_PAL_INVALID_ARGUMENT 2u
@@ -42,8 +47,18 @@ typedef struct {
     dotnet_pal_vm_ops vm;
 } dotnet_pal_host_api;
 
-/* Returns an immutable process-lifetime table, or NULL. No runtime initialization. */
+/* Returns an immutable instance-lifetime table, or NULL. Check capabilities.
+ * The arena profile must be initialized before this returns a table.
+ */
 const dotnet_pal_api *dotnet_pal_get_api(uint32_t version);
+
+/* Exported only by the arena feature, for single-threaded non-shared WASM.
+ * Initialize once, before managed startup, with exclusively owned, nonmoving,
+ * aligned writable storage valid for the instance lifetime. It must not overlap
+ * PAL metadata, stack, allocator storage or any other live memory. All calls
+ * must be serialized and non-reentrant. See docs/wasm.md.
+ */
+uint32_t dotnet_pal_arena_init(void *base, size_t size, size_t page_size);
 
 /* Required only by --no-default-features --features host. May be written in C/C++.
  * Table and callbacks must be ready before the first managed allocation, thread-safe,
