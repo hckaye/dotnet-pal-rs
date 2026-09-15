@@ -21,6 +21,9 @@
   <Import Project="../../artifacts/llvm/wrap.props" Condition="'$(PalWrap)' == 'true'" />
   <Target Name="RecordCompilerRuntime" BeforeTargets="LinkNativeLlvm" DependsOnTargets="SetupOSSpecificProps">
     <WriteLinesToFile File="$(PalRoot)/artifacts/llvm/runtime-archive.txt" Lines="$(IlcSdkPath)libPortableRuntime.a" Overwrite="true" />
-    <Exec Command="python3 &quot;$(PalRoot)/integration/llvm-wasi/symbols.py&quot; --runtime &quot;$(IlcSdkPath)libPortableRuntime.a&quot; --nm &quot;$(WASI_SDK_PATH)/bin/llvm-nm&quot;" />
+    <PropertyGroup>
+      <PalSourceArg Condition="'$(PalSourceManifest)' != ''">--source-manifest &quot;$(PalSourceManifest)&quot;</PalSourceArg>
+    </PropertyGroup>
+    <Exec Command="python3 &quot;$(PalRoot)/integration/llvm-wasi/symbols.py&quot; --runtime &quot;$(IlcSdkPath)libPortableRuntime.a&quot; --nm &quot;$(WASI_SDK_PATH)/bin/llvm-nm&quot; $(PalSourceArg)" />
   </Target>
 </Project>

@@ -8,10 +8,16 @@ permissions:
 jobs:
   managed-wasi:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: dotnet/runtimelab
+          ref: 9954350a58ede8b8eaaeb24112ca4f1e78cc527c
+          path: artifacts/llvm-runtime
           persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
@@ -19,11 +25,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Rust toolchain and native linear adapter contracts
+      - name: Rust and native prerequisites; linear adapter contract tests
         run: |
           rustup toolchain install 1.85.1 --profile minimal
           rustup override set 1.85.1
           rustup target add wasm32-wasip1
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build clang llvm lld python3
           bash scripts/gc-linear.sh
       - name: Verify WASI SDK and execute managed negative and positive controls
         shell: bash
@@ -36,7 +44,12 @@ jobs:
           printf '87d1d1a2879d139cdc624b968efad3d4a97b8078cdff95e63ac88ecafd1a0171  %s\n' "$RUNNER_TEMP/llvm-sdk/sdk.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/llvm-sdk/sdk.tar.gz" -C "$RUNNER_TEMP/llvm-sdk"
           export WASI_SDK_PATH="$RUNNER_TEMP/llvm-sdk/wasi-sdk-29.0-x86_64-linux"
+          printf 'WASI_SDK_PATH=%s\n' "$WASI_SDK_PATH" >> "$GITHUB_ENV"
           bash scripts/llvm-investigate.sh
+      - name: Rebuild and execute the actual LLVM native runtime without wrapping
+        env:
+          NUGET_PACKAGES: ${{ runner.temp }}/llvm-packages
+        run: bash scripts/llvm-source.sh artifacts/llvm-runtime
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
