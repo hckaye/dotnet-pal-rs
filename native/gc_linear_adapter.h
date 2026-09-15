@@ -1,7 +1,6 @@
 #ifndef DOTNET_PAL_GC_LINEAR_ADAPTER_H
 #define DOTNET_PAL_GC_LINEAR_ADAPTER_H
-// Explicit eager-storage GC profile, NOT CAP_VM or a transparent VM emulation.
-// Only the selected single-threaded LLVM/WASI runtime profile may use this adapter.
+// Explicit eager-storage GC profile, NOT CAP_VM or transparent VM emulation.
 // No inaccessible reservation, physical decommit or memory.grow is promised.
 #include "dotnet_pal.h"
 #include <atomic>
@@ -39,8 +38,13 @@ inline size_t rounded(size_t size) {
     if (!size || size > SIZE_MAX - (grain - 1)) return 0;
     return (size + grain - 1) & ~(grain - 1);
 }
-// The ledger is adapter-owned, bounded, and protected by gate. Caller must still
-// serialize direct payload access with decommit/reset/release. No stale-handle guarantee.
+inline size_t page_range(void *address, size_t size) {
+    size_t grain = require()->linear.granularity();
+    if (!address || reinterpret_cast<uintptr_t>(address) % grain != 0) return 0;
+    return rounded(size);
+}
+// Metadata is adapter-owned, bounded and protected by gate. Direct payload access
+// must be synchronized with decommit/reset/release. No stale-handle guarantee.
 inline Region *find(void *address, size_t size) {
     uintptr_t start = reinterpret_cast<uintptr_t>(address);
     if (!address || !size || start > UINTPTR_MAX - size) return nullptr;
@@ -70,14 +74,14 @@ inline void *reserve(size_t size, size_t alignment, uint32_t flags, uint16_t nod
 inline bool commit(void *address, size_t size, uint16_t node) {
     (void)node;
     Guard lock;
-    size_t n = rounded(size);
+    size_t n = page_range(address, size);
     if (!find(address, n)) { increment(counters.failures); return false; }
-    // Already allocated and accessible. Repeated logical commit MUST preserve data.
+    // Already allocated and accessible; repeated logical commit preserves data.
     increment(counters.commit_ok); return true;
 }
 inline bool zero(void *address, size_t size, bool reset) {
     Guard lock;
-    size_t n = rounded(size);
+    size_t n = page_range(address, size);
     if (!find(address, n) || require()->linear.zero(address, n) != DOTNET_PAL_OK) {
         increment(counters.failures); return false;
     }
@@ -87,7 +91,7 @@ inline bool decommit(void *address, size_t size) { return zero(address, size, fa
 inline bool reset(void *address, size_t size, bool unlock) { (void)unlock; return zero(address, size, true); }
 inline bool release(void *address, size_t size) {
     Guard lock;
-    size_t n = rounded(size);
+    size_t n = page_range(address, size);
     Region *r = find(address, n);
     if (!r || r->address != address || r->size != n ||
         require()->linear.release(address, n) != DOTNET_PAL_OK) {
