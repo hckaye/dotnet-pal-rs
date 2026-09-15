@@ -18,6 +18,7 @@ use core::{ffi::c_void, mem, ptr};
 mod counter;
 use counter::Counter;
 pub mod services;
+pub mod kernel;
 #[cfg(feature = "linux")]
 #[path = "linux.rs"]
 mod backend;
@@ -86,6 +87,7 @@ pub struct Api {
     // Additive ABI 2 extensions. Existing prefix and HostApi layout stay unchanged.
     pub linear: LinearOps,
     pub services: services::Ops,
+    pub kernel: kernel::Ops,
 }
 static RESERVE: Counter = Counter::new();
 static COMMIT: Counter = Counter::new();
@@ -215,10 +217,10 @@ mod linear_api {
         zero: Some(zero), release: Some(release), read_stats: Some(stats),
     };
 }
-static API: Api = Api {
+const API_BASE: Api = Api {
     header: Header {
         abi_version: ABI_VERSION, struct_size: mem::size_of::<Api>() as u32,
-        capabilities: (if cfg!(feature = "linear") { CAP_LINEAR } else { CAP_VM }) | services::CAPABILITIES,
+        capabilities: (if cfg!(feature = "linear") { CAP_LINEAR } else { CAP_VM }) | services::CAPABILITIES | kernel::CAPABILITIES,
     },
     #[cfg(not(feature = "linear"))]
     vm: vm::OPS,
@@ -230,13 +232,26 @@ static API: Api = Api {
     #[cfg(not(feature = "linear"))]
     linear: LinearOps { granularity: None, capacity: None, allocate: None, zero: None, release: None, read_stats: None },
     services: services::OPS,
+    kernel: kernel::OPS,
+};
+static API: Api = API_BASE;
+#[cfg(feature = "linux")]
+static API_NO_BARRIER: Api = Api {
+    header: Header {
+        abi_version: ABI_VERSION, struct_size: mem::size_of::<Api>() as u32,
+        capabilities: API_BASE.header.capabilities & !kernel::CAP_BARRIER,
+    },
+    kernel: kernel::OPS_NO_BARRIER,
+    ..API_BASE
 };
 /// The only runtime-facing PAL entry point. Valid before managed runtime startup.
 #[no_mangle]
 pub extern "C" fn dotnet_pal_get_api(version: u32) -> *const Api {
-    if version != ABI_VERSION || !services::available() { return ptr::null(); }
+    if version != ABI_VERSION || !services::available() || !kernel::available() { return ptr::null(); }
     #[cfg(not(feature = "linear"))]
     if !backend::page_size().is_power_of_two() { return ptr::null(); }
+    #[cfg(feature = "linux")]
+    if !kernel::has_barrier() { return &API_NO_BARRIER; }
     &API
 }
 #[cfg(not(test))]

@@ -24,6 +24,41 @@ internal static class Program
             throw new InvalidOperationException("services observer unavailable");
         return stats;
     }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KernelStats
+    {
+        public ulong EventCreate, EventWait, EventTimeout, EventSet, MutexCreate, MutexLock;
+        public ulong ThreadCreate, TlsCreate, TlsSet, StackBounds, Barrier, Failed;
+    }
+    [DllImport("__Internal", EntryPoint = "dotnet_pal_probe_kernel_stats")]
+    private static extern uint ReadKernelStats(out KernelStats stats, nuint size);
+    private static KernelStats KernelSnapshot()
+    {
+        if (ReadKernelStats(out KernelStats stats, (nuint)Marshal.SizeOf<KernelStats>()) != 0)
+            throw new InvalidOperationException("kernel observer unavailable");
+        return stats;
+    }
+    private static int finalized;
+    private sealed class FinalizerCanary
+    {
+        ~FinalizerCanary() { Interlocked.Increment(ref finalized); }
+    }
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void CreateFinalizers()
+    {
+        for (int i = 0; i < 128; ++i) GC.KeepAlive(new FinalizerCanary());
+    }
+    private static void ThreadAndFinalizerWork()
+    {
+        CreateFinalizers();
+        var workers = Enumerable.Range(0, 8).Select(_ => new Thread(SmallAllocations)).ToArray();
+        foreach (Thread worker in workers) worker.Start();
+        foreach (Thread worker in workers) Require(worker.Join(TimeSpan.FromSeconds(30)), "native thread failed to terminate");
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+        Require(Volatile.Read(ref finalized) == 128, "finalizer execution was lost or repeated");
+    }
     private static Stats Snapshot()
     {
         if (ReadStats(out Stats stats, (nuint)Marshal.SizeOf<Stats>()) != 0)
@@ -59,12 +94,14 @@ internal static class Program
     }
     public static int Main(string[] args)
     {
-        bool sourceServices = args.Length == 1 && args[0] == "source-services";
+        bool sourceKernel = args.Length == 1 && args[0] == "source-kernel";
+        bool sourceServices = sourceKernel || (args.Length == 1 && args[0] == "source-services");
         bool wrapped = sourceServices || (args.Length == 1 && args[0] == "wrapped");
         Require(wrapped || (args.Length == 1 && args[0] == "baseline"), "expected wrapped, baseline or source-services");
         Require(!RuntimeFeature.IsDynamicCodeSupported, "must run the published NativeAOT executable");
         Stats before = Snapshot();
         ServicesStats servicesBefore = ServicesSnapshot();
+        KernelStats kernelBefore = KernelSnapshot();
         for (int wave = 0; wave < 3; wave++)
         {
             AllocateWave();
@@ -72,6 +109,7 @@ internal static class Program
             GC.WaitForPendingFinalizers();
         }
         Task.WaitAll(Enumerable.Range(0, 4).Select(_ => Task.Run(SmallAllocations)).ToArray());
+        ThreadAndFinalizerWork();
         Stats after = Snapshot();
         if (wrapped)
         {
@@ -96,6 +134,29 @@ internal static class Program
             Require(servicesAfter.Clock == 0 && servicesAfter.Sleep == 0 && servicesAfter.Yield == 0 &&
                 servicesAfter.Failed == 0, "service negative control unexpectedly crossed Rust");
         }
+        KernelStats kernelAfter = KernelSnapshot();
+        if (sourceKernel)
+        {
+            Require(kernelAfter.EventCreate > 0 && kernelAfter.EventWait > kernelBefore.EventWait &&
+                kernelAfter.EventSet > kernelBefore.EventSet, "runtime event path did not cross Rust");
+            Require(kernelAfter.MutexLock > kernelBefore.MutexLock, "runtime/GC locks did not cross Rust");
+            Require(kernelAfter.ThreadCreate > 0, "background/finalizer threads did not cross Rust");
+            Require(kernelAfter.TlsCreate > 0 && kernelAfter.TlsSet > kernelBefore.TlsSet,
+                "thread attachment/termination TLS did not cross Rust");
+            Require(kernelAfter.StackBounds > kernelBefore.StackBounds && kernelAfter.Barrier > kernelBefore.Barrier,
+                "stack bounds or process barriers did not cross Rust");
+            Require(kernelAfter.Failed == 0, "unexpected kernel boundary failure");
+        }
+        else
+        {
+            Require(kernelAfter.EventCreate == 0 && kernelAfter.EventWait == 0 && kernelAfter.EventSet == 0 &&
+                kernelAfter.MutexCreate == 0 && kernelAfter.MutexLock == 0 && kernelAfter.ThreadCreate == 0 &&
+                kernelAfter.TlsCreate == 0 && kernelAfter.TlsSet == 0 && kernelAfter.StackBounds == 0 &&
+                kernelAfter.Barrier == 0 && kernelAfter.Failed == 0, "kernel negative control crossed Rust");
+        }
+        Console.WriteLine($"KERNEL GC PROBE PASS source={sourceKernel} events={kernelAfter.EventCreate} " +
+            $"waits={kernelAfter.EventWait} locks={kernelAfter.MutexLock} threads={kernelAfter.ThreadCreate} " +
+            $"tls={kernelAfter.TlsSet} stacks={kernelAfter.StackBounds} barriers={kernelAfter.Barrier} finalizers={finalized}");
         Console.WriteLine($"SERVICES PROBE PASS source={sourceServices} clock_before={servicesBefore.Clock} " +
             $"clock_after={servicesAfter.Clock} sleep={servicesAfter.Sleep} yield={servicesAfter.Yield}");
         Console.WriteLine($"GC PROBE PASS mode={(wrapped ? "wrapped" : "baseline")} " +

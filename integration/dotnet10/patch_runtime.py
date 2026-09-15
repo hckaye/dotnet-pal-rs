@@ -8,6 +8,9 @@ import argparse
 from pathlib import Path
 import re
 import subprocess
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import kernel_patch
 
 REVISION = "60629d14374c56f1cb51819049ad1fa529307f8d"
 GC_FILE = "src/coreclr/gc/unix/gcenv.unix.cpp"
@@ -60,8 +63,9 @@ def main():
     head = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
     if head != REVISION:
         raise SystemExit(f"Expected {REVISION}, got {head}; re-audit before updating the pin")
-    subprocess.run(["git", "-C", str(root), "diff", "--exit-code", "HEAD", "--", GC_FILE, CMAKE_FILE], check=True)
-    gc = patch_gc((root / GC_FILE).read_text())
+    subprocess.run(["git", "-C", str(root), "diff", "--exit-code", "HEAD", "--", GC_FILE, CMAKE_FILE, *kernel_patch.FILES], check=True)
+    gc = kernel_patch.gc_extra(patch_gc((root / GC_FILE).read_text()))
+    extra = {path: transform((root / path).read_text()) for path, transform in kernel_patch.TRANSFORMS.items()}
     cmake = (root / CMAKE_FILE).read_text()
     if MARKER in cmake:
         raise SystemExit("CMake is already patched")
@@ -70,7 +74,7 @@ if(DOTNET_PAL_ROOT)
   if(NOT CLR_CMAKE_TARGET_LINUX)
     message(FATAL_ERROR "This source integration has only been prepared for Linux")
   endif()
-  add_definitions(-DDOTNET_PAL_GC_VM=1)
+  add_definitions(-DDOTNET_PAL_GC_VM=1 -DDOTNET_PAL_KERNEL=1)
   include_directories("${DOTNET_PAL_ROOT}/include" "${DOTNET_PAL_ROOT}/native")
 endif()
 
@@ -78,7 +82,8 @@ endif()
     if not args.check:
         (root / GC_FILE).write_text(gc)
         (root / CMAKE_FILE).write_text(cmake)
-    print("Source adapter: six GC VM and five clock/scheduling definitions validated" + (" (check only)" if args.check else " and patched"))
+        for path, content in extra.items(): (root / path).write_text(content)
+    print("Source adapter: VM, clocks, GC/runtime events, recursive locks, thread startup, TLS, stacks and barriers validated" + (" (check only)" if args.check else " and patched"))
 
 if __name__ == "__main__":
     main()

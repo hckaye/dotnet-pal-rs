@@ -16,6 +16,16 @@ extern "C" {
 #define DOTNET_PAL_INVALID_ARGUMENT 2u
 #define DOTNET_PAL_OS_ERROR 3u
 #define DOTNET_PAL_OUT_OF_MEMORY 4u
+#define DOTNET_PAL_TIMEOUT 5u
+#define DOTNET_PAL_BUSY 6u
+#define DOTNET_PAL_INFINITE_NS UINT64_MAX
+#define DOTNET_PAL_CAP_EVENTS UINT64_C(16)
+#define DOTNET_PAL_CAP_MUTEX UINT64_C(32)
+#define DOTNET_PAL_CAP_THREADS UINT64_C(64)
+#define DOTNET_PAL_CAP_TLS UINT64_C(128)
+#define DOTNET_PAL_CAP_STACK UINT64_C(256)
+#define DOTNET_PAL_CAP_PROCESS_BARRIER UINT64_C(512)
+#define DOTNET_PAL_CAP_KERNEL UINT64_C(1008)
 
 typedef struct {
     uint32_t abi_version;
@@ -71,6 +81,43 @@ typedef struct {
     uint32_t (*read_stats)(dotnet_pal_services_stats *out, size_t out_size);
 } dotnet_pal_services_ops;
 
+/* Kernel handles are opaque, native-owned objects. Closing a handle consumes it.
+ * The caller owns lifetime synchronization: no use after close, no concurrent close,
+ * no asynchronous cancellation, and no unwind across callbacks. See docs/kernel.md.
+ */
+typedef void *(*dotnet_pal_thread_entry)(void *arg);
+typedef void (*dotnet_pal_tls_destructor)(void *value);
+typedef struct {
+    uint64_t event_create_ok, event_wait_ok, event_timeout, event_set_ok;
+    uint64_t mutex_create_ok, mutex_lock_ok, thread_create_ok, tls_create_ok, tls_set_ok;
+    uint64_t stack_bounds_ok, barrier_ok, rejected_or_failed;
+} dotnet_pal_kernel_stats;
+typedef struct {
+    uint32_t (*event_create)(uint32_t manual_reset, uint32_t initial_state, void **out);
+    uint32_t (*event_destroy)(void *handle);
+    uint32_t (*event_set)(void *handle);
+    uint32_t (*event_reset)(void *handle);
+    uint32_t (*event_wait)(void *handle, uint64_t timeout_ns);
+    uint32_t (*mutex_create)(uint32_t recursive, void **out);
+    uint32_t (*mutex_destroy)(void *handle);
+    uint32_t (*mutex_lock)(void *handle);
+    uint32_t (*mutex_unlock)(void *handle);
+    uint32_t (*thread_create)(dotnet_pal_thread_entry entry, void *arg, size_t stack_size, void **out);
+    uint32_t (*thread_join)(void *handle);
+    uint32_t (*thread_detach)(void *handle);
+    uint32_t (*tls_create)(dotnet_pal_tls_destructor destructor, void **out);
+    uint32_t (*tls_destroy)(void *handle);
+    uint32_t (*tls_get)(void *handle, void **out);
+    uint32_t (*tls_set)(void *handle, void *value);
+    uint32_t (*stack_bounds)(void **low, void **high);
+    uint32_t (*process_barrier)(void);
+    uint32_t (*read_stats)(dotnet_pal_kernel_stats *out, size_t out_size);
+} dotnet_pal_kernel_ops;
+typedef struct {
+    dotnet_pal_header header;
+    dotnet_pal_kernel_ops ops;
+} dotnet_pal_host_kernel;
+
 typedef struct {
     dotnet_pal_header header;
     dotnet_pal_vm_ops vm;
@@ -78,12 +125,14 @@ typedef struct {
     dotnet_pal_linear_ops linear;
     /* ABI 2 append-only extension. All preceding offsets stay unchanged. */
     dotnet_pal_services_ops services;
+    dotnet_pal_kernel_ops kernel;
 } dotnet_pal_api;
 
 /* Use size checks BEFORE reading a capability group from a foreign table.
  * Each size marks the END of that group, not sizeof a future extended API. */
 #define DOTNET_PAL_VM_API_SIZE offsetof(dotnet_pal_api, linear)
 #define DOTNET_PAL_LINEAR_API_SIZE offsetof(dotnet_pal_api, services)
+#define DOTNET_PAL_KERNEL_API_SIZE (offsetof(dotnet_pal_api, kernel) + sizeof(dotnet_pal_kernel_ops))
 #define DOTNET_PAL_SERVICES_API_SIZE (offsetof(dotnet_pal_api, services) + sizeof(dotnet_pal_services_ops))
 
 typedef struct {
@@ -109,6 +158,8 @@ const dotnet_pal_api *dotnet_pal_get_api(uint32_t version);
  */
 const dotnet_pal_host_api *dotnet_pal_host_v2(void);
 const dotnet_pal_host_services *dotnet_pal_host_services_v2(void);
+/* Required only for host-kernel; legacy providers need no new symbols. */
+const dotnet_pal_host_kernel *dotnet_pal_host_kernel_v2(void);
 #if defined(__cplusplus)
 [[noreturn]] void dotnet_pal_host_abort(void);
 #else

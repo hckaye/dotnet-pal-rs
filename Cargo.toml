@@ -1,6 +1,6 @@
 [package]
 name = "dotnet-pal-rs"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Experimental no_std OS boundary for NativeAOT portability research"
@@ -15,6 +15,7 @@ linux = ["dep:libc"]
 host = []
 linear = []
 host-services = ["host"]
+host-kernel = ["host-services"]
 wasi-clock = ["linear"]
 
 [dependencies]

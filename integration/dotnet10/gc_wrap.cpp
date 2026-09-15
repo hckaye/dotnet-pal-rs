@@ -39,3 +39,11 @@ extern "C" uint32_t dotnet_pal_probe_services_stats(dotnet_pal_services_stats *o
         return DOTNET_PAL_UNSUPPORTED;
     return p->services.read_stats(out, size);
 }
+
+// Observation only; the baseline/VM-only paths must leave kernel counters zero.
+extern "C" uint32_t dotnet_pal_probe_kernel_stats(dotnet_pal_kernel_stats *out, size_t size) {
+    const auto *p = dotnet_pal_get_api(DOTNET_PAL_ABI_VERSION);
+    if (!p || p->header.struct_size < DOTNET_PAL_KERNEL_API_SIZE || !p->kernel.read_stats)
+        return DOTNET_PAL_UNSUPPORTED;
+    return p->kernel.read_stats(out, size);
+}

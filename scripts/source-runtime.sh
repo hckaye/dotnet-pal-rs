@@ -39,14 +39,15 @@ clang++ -std=c++17 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -
   -DDOTNET_PAL_OBSERVER_ONLY -Iinclude -Inative -c integration/dotnet10/gc_wrap.cpp -o artifacts/gc_observer.o
 # The source adapter now requires clock/scheduling services as well as VM.
 # Keep the legacy VM-only --wrap negative/positive tests above unchanged.
-cargo build --release --no-default-features --features host-services --target-dir target/host-services
+cargo build --release --no-default-features --features host-kernel --target-dir target/host-kernel
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/services_host.c -o artifacts/services_host.o
-clang -r artifacts/host_backend.o artifacts/services_host.o -o artifacts/host_services_backend.o
+clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/kernel_host.c -o artifacts/kernel_host.o
+clang -r artifacts/host_backend.o artifacts/services_host.o artifacts/kernel_host.o -o artifacts/host_services_backend.o
 for backend in linux host; do
   pal="$root/target/release/libdotnet_pal_rs.a"
   host_args=()
   if [[ "$backend" == host ]]; then
-    pal="$root/target/host-services/release/libdotnet_pal_rs.a"
+    pal="$root/target/host-kernel/release/libdotnet_pal_rs.a"
     host_args=("-p:PalHostObject=$root/artifacts/host_services_backend.o")
   fi
   rm -rf samples/GcProbe/obj/Release samples/GcProbe/bin/Release
@@ -61,7 +62,7 @@ for backend in linux host; do
     echo 'Unexpected --wrap helper in the source configuration' >&2; exit 1
   fi
   DOTNET_GCHeapHardLimit=0x20000000 DOTNET_GCServer=0 DOTNET_GCLargePages=0 \
-    COMPlus_gcServer=0 COMPlus_GCLargePages=0 timeout 120s "$binary" source-services \
+    COMPlus_gcServer=0 COMPlus_GCLargePages=0 timeout 120s "$binary" source-kernel \
     | tee "artifacts/source-$backend-run.log"
-  echo "SOURCE RUNTIME PASS backend=$backend (VM and services, no --wrap, native runtime rebuilt)"
+  echo "SOURCE RUNTIME PASS backend=$backend (VM, services and kernel, no --wrap, native runtime rebuilt)"
 done

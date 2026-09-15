@@ -29,6 +29,8 @@ jobs:
         run: bash scripts/check.sh
       - name: Clock, scheduler, interrupted sleep and host fault tests
         run: bash scripts/services.sh
+      - name: Kernel synchronization, TLS and thread conformance
+        run: bash scripts/kernel.sh
       - name: Actual NativeAOT GC negative and positive controls
         run: bash scripts/nativeaot.sh
       - name: Freestanding ARM64 boundary compile
@@ -46,6 +48,11 @@ jobs:
           sparse-checkout: |
             /src/coreclr/gc/unix/gcenv.unix.cpp
             /src/coreclr/nativeaot/Runtime/CMakeLists.txt
+            /src/coreclr/gc/env/gcenv.os.h
+            /src/coreclr/gc/unix/events.cpp
+            /src/coreclr/nativeaot/Runtime/unix/PalUnix.cpp
+            /src/coreclr/nativeaot/Runtime/Crst.h
+            /src/coreclr/nativeaot/Runtime/Crst.cpp
       - name: Validate source-patch applicability, not a runtime source build
         if: ${{ !cancelled() && steps.boundary.outcome == 'success' }}
         run: |
@@ -91,6 +98,7 @@ jobs:
             rustup target add "$target"
             cargo build --release --no-default-features --features host --target "$target"
             cargo build --release --no-default-features --features host-services --target "$target"
+            cargo build --release --no-default-features --features host-kernel --target "$target"
           done
 
   source-runtime:
@@ -116,7 +124,7 @@ jobs:
           rustup override set 1.85.1
           sudo apt-get update
           sudo apt-get install -y clang llvm lld cmake ninja-build python3 libicu-dev liblttng-ust-dev libunwind-dev libssl-dev libkrb5-dev zlib1g-dev
-      - name: Rebuild native runtime; verify VM and clock calls without linker wrapping
+      - name: Rebuild native runtime; verify VM, clock, synchronization, TLS and thread paths without linker wrapping
         run: bash scripts/source-runtime.sh artifacts/runtime-source
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}

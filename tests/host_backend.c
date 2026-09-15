@@ -1,4 +1,4 @@
-// Linux mock of a PRIVATE SDK backend. This is not Switch code.
+/* Explicit Linux reference VM provider for host-backend tests. */
 #define _GNU_SOURCE
 #include "dotnet_pal.h"
 #include <stdlib.h>

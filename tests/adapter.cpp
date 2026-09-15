@@ -16,12 +16,12 @@ static uint32_t range(void *p, size_t n) {
     return DOTNET_PAL_OK;
 }
 static size_t page_size() { return 4096; }
-static dotnet_pal_api API = {
-    { DOTNET_PAL_ABI_VERSION, sizeof(dotnet_pal_api), DOTNET_PAL_CAP_VM },
-    { page_size, reserve, range, range, range, range }, nullptr,
-    { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr },
-    { nullptr, nullptr, nullptr, nullptr }
-};
+static dotnet_pal_api API = [] {
+    dotnet_pal_api a{};
+    a.header = { DOTNET_PAL_ABI_VERSION, sizeof(dotnet_pal_api), DOTNET_PAL_CAP_VM };
+    a.vm = { page_size, reserve, range, range, range, range };
+    return a;
+}();
 extern "C" const dotnet_pal_api *dotnet_pal_get_api(uint32_t version) {
     assert(version == DOTNET_PAL_ABI_VERSION);
     return enabled ? &API : nullptr;
