@@ -1,0 +1,31 @@
+name: boundary-sanitizers
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  address:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install the pinned instrumentation toolchain
+        run: |
+          rustup toolchain install nightly-2025-03-15 --profile minimal --component rust-src
+          sudo apt-get update
+          sudo apt-get install -y clang llvm lld
+      - name: Instrument Rust, core and C/C++ callers together
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/asan
+          bash scripts/sanitize.sh address 2>&1 | tee artifacts/asan/run.log
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: mixed-language-sanitizer-evidence
+          path: artifacts/asan/*.log
+          if-no-files-found: error

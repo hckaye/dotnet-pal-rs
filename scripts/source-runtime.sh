@@ -10,7 +10,6 @@ case "$(uname -m)" in x86_64) arch=x64;; aarch64) arch=arm64;; *) exit 2;; esac
 mkdir -p artifacts
 python3 integration/dotnet10/patch_runtime.py "$runtime" --check
 python3 integration/dotnet10/patch_runtime.py "$runtime"
-# Keep the complete build log as evidence; surface the diagnostic tail on failure.
 if ! "$runtime/src/coreclr/build-runtime.sh" -release -arch "$arch" -component nativeaot -ninja \
   -cmakeargs "-DDOTNET_PAL_ROOT=$root" > artifacts/source-build.log 2>&1; then
   tail -n 100 artifacts/source-build.log; exit 1
@@ -47,4 +46,12 @@ clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/services_host.
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/kernel_host.c -o artifacts/kernel_host.o
 clang -r artifacts/host_backend.o artifacts/services_host.o artifacts/kernel_host.o -o artifacts/host_services_backend.o
 bash scripts/qualify.sh "$overlay" "$root/artifacts/source-manifest.json"
+for profile in workstation server; do
+  collector=WorkstationGC
+  [[ "$profile" != server ]] || collector=ServerGC
+  python3 scripts/audit_dependencies.py \
+    --runtime "$overlay/libRuntime.$collector.a" --pal target/release/libdotnet_pal_rs.a \
+    --binary "artifacts/qualification/$profile-linux/GcProbe" \
+    --output "artifacts/qualification/$profile-linux/dependency-inventory.log"
+done
 echo "SOURCE RUNTIME QUALIFICATION PASS architecture=$arch (workstation and server, no --wrap)"
