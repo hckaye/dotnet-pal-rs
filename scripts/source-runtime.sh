@@ -19,10 +19,10 @@ mapfile -t archives < <(find "$runtime/artifacts/bin/coreclr" -name libRuntime.W
 rebuilt=${archives[0]}
 # Independent proof that the archive calls our boundary, not just that the patch applied.
 nm -u "$rebuilt" > artifacts/source-undefined.txt
- grep -q 'dotnet_pal_get_api' artifacts/source-undefined.txt
+grep -q 'dotnet_pal_get_api' artifacts/source-undefined.txt
 bash scripts/nativeaot.sh
 # nativeaot.sh records the actual published SDK path selected by MSBuild.
-original=$(cat artifacts/runtime-archive.txt)
+original=$(python3 -c 'from pathlib import Path; print(Path("artifacts/runtime-archive.txt").read_text(encoding="utf-8-sig").strip())')
 overlay="$root/artifacts/source-sdk"
 mkdir -p "$overlay"
 # Fresh destination required; no modifications to the NuGet cache or source checkout.
@@ -30,7 +30,16 @@ mkdir -p "$overlay"
 cp -as "$(dirname "$original")/." "$overlay/"
 rm "$overlay/libRuntime.WorkstationGC.a"
 cp "$rebuilt" "$overlay/libRuntime.WorkstationGC.a"
-clang++ -std=c++17 -O2 -fPIC -ffunction-sections -fdata-sections \
+python3 - "$overlay/libRuntime.WorkstationGC.a" "$runtime" <<'PYMANIFEST'
+import hashlib, json, subprocess, sys
+from pathlib import Path
+archive = Path(sys.argv[1])
+revision = subprocess.check_output(["git", "-C", sys.argv[2], "rev-parse", "HEAD"], text=True).strip()
+manifest = {"runtime_revision": revision, "adapter": "dotnet-pal-gc-vm-v2",
+            "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest()}
+Path("artifacts/source-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+PYMANIFEST
+clang++ -std=c++17 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
   -DDOTNET_PAL_OBSERVER_ONLY -Iinclude -Inative -c integration/dotnet10/gc_wrap.cpp -o artifacts/gc_observer.o
 for backend in linux host; do
   pal="$root/target/release/libdotnet_pal_rs.a"
@@ -42,6 +51,7 @@ for backend in linux host; do
   rm -rf samples/GcProbe/obj/Release samples/GcProbe/bin/Release
   dotnet publish samples/GcProbe/GcProbe.csproj -r "linux-$arch" -c Release \
     -p:PalWrap=false "-p:IlcSdkPath=$overlay/" "-p:PalLib=$pal" \
+    "-p:PalSourceManifest=$root/artifacts/source-manifest.json" \
     "-p:PalObserverObject=$root/artifacts/gc_observer.o" "${host_args[@]}" \
     -o "artifacts/source-$backend"
   binary="artifacts/source-$backend/GcProbe"
@@ -50,6 +60,7 @@ for backend in linux host; do
     echo 'Unexpected --wrap helper in the source configuration' >&2; exit 1
   fi
   DOTNET_GCHeapHardLimit=0x20000000 DOTNET_GCServer=0 DOTNET_GCLargePages=0 \
-    COMPlus_gcServer=0 COMPlus_GCLargePages=0 "$binary" wrapped
+    COMPlus_gcServer=0 COMPlus_GCLargePages=0 timeout 120s "$binary" wrapped \
+    | tee "artifacts/source-$backend-run.log"
   echo "SOURCE RUNTIME PASS backend=$backend (no --wrap, native runtime rebuilt)"
 done

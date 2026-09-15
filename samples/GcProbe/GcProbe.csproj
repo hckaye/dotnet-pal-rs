@@ -26,6 +26,9 @@
   <Target Name="PalAuditRuntime" BeforeTargets="LinkNative" DependsOnTargets="SetupOSSpecificProps">
     <Error Condition="'$(RuntimeFrameworkVersion)' != '10.0.0'" Text="This probe requires runtime 10.0.0" />
     <WriteLinesToFile File="$(PalRoot)/artifacts/runtime-archive.txt" Lines="$(IlcSdkPath)$(FullRuntimeName).a" Overwrite="true" />
-    <Exec Command="python3 &quot;$(PalRoot)/integration/dotnet10/symbols.py&quot; --runtime &quot;$(IlcSdkPath)$(FullRuntimeName).a&quot;" />
+    <PropertyGroup>
+      <PalSourceAuditArg Condition="'$(PalSourceManifest)' != ''">--source-manifest &quot;$(PalSourceManifest)&quot;</PalSourceAuditArg>
+    </PropertyGroup>
+    <Exec Command="python3 &quot;$(PalRoot)/integration/dotnet10/symbols.py&quot; --runtime &quot;$(IlcSdkPath)$(FullRuntimeName).a&quot; $(PalSourceAuditArg)" />
   </Target>
 </Project>
