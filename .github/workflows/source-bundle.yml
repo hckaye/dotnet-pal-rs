@@ -1,0 +1,27 @@
+name: source-bundle
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Archive tracked source only
+        shell: bash
+        run: |
+          mkdir -p artifacts/source
+          git archive --format=tar.gz --prefix=dotnet-pal-rs/ HEAD > artifacts/source/dotnet-pal-rs.tar.gz
+          git rev-parse HEAD > artifacts/source/revision.txt
+          sha256sum artifacts/source/dotnet-pal-rs.tar.gz > artifacts/source/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-snapshot
+          path: artifacts/source/
+          if-no-files-found: error
+          retention-days: 14
