@@ -1,0 +1,39 @@
+name: offline-devkit
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/offline-devkit.yml']
+permissions:
+  contents: read
+jobs:
+  inputs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: dotnet/runtime
+          ref: 60629d14374c56f1cb51819049ad1fa529307f8d
+          path: artifacts/upstream
+          persist-credentials: false
+      - name: Package public, pinned build inputs only
+        shell: bash
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal --component rustfmt
+          mkdir -p artifacts/offline
+          cargo +1.85.1 vendor --versioned-dirs artifacts/vendor > artifacts/offline/vendor-config.toml
+          tar -czf artifacts/offline/rust-toolchain.tar.gz -C "$(rustc +1.85.1 --print sysroot)" .
+          tar -czf artifacts/offline/vendor.tar.gz -C artifacts vendor
+          git -C artifacts/upstream archive --format=tar.gz --prefix=runtime/ HEAD src/coreclr/gc src/coreclr/nativeaot/Runtime src/coreclr/nativeaot/Bootstrap src/native/minipal LICENSE.TXT > artifacts/offline/runtime-inputs.tar.gz
+          git -C artifacts/upstream rev-parse HEAD > artifacts/offline/runtime-revision.txt
+          rustc +1.85.1 -vV > artifacts/offline/rust-version.txt
+          sha256sum artifacts/offline/*.tar.gz > artifacts/offline/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: offline-build-inputs
+          path: artifacts/offline/
+          if-no-files-found: error
+          retention-days: 3
