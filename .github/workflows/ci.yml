@@ -27,6 +27,8 @@ jobs:
       - name: Boundary and adapter tests
         id: boundary
         run: bash scripts/check.sh
+      - name: Clock, scheduler, interrupted sleep and host fault tests
+        run: bash scripts/services.sh
       - name: Actual NativeAOT GC negative and positive controls
         run: bash scripts/nativeaot.sh
       - name: Freestanding ARM64 boundary compile
@@ -67,6 +69,8 @@ jobs:
           sudo apt-get update && sudo apt-get install -y clang lld
       - name: Execute C to Rust boundary in three Wasm target modules
         run: bash scripts/wasm.sh
+      - name: Real WASIp1 clock import and injected failure
+        run: bash scripts/wasi-clock.sh
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
@@ -86,10 +90,15 @@ jobs:
           for target in aarch64-unknown-none riscv64gc-unknown-none-elf thumbv7em-none-eabi; do
             rustup target add "$target"
             cargo build --release --no-default-features --features host --target "$target"
+            cargo build --release --no-default-features --features host-services --target "$target"
           done
 
   source-runtime:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
@@ -107,14 +116,16 @@ jobs:
           rustup override set 1.85.1
           sudo apt-get update
           sudo apt-get install -y clang llvm lld cmake ninja-build python3 libicu-dev liblttng-ust-dev libunwind-dev libssl-dev libkrb5-dev zlib1g-dev
-      - name: Rebuild native runtime and run both backends without linker wrapping
+      - name: Rebuild native runtime; verify VM and clock calls without linker wrapping
         run: bash scripts/source-runtime.sh artifacts/runtime-source
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: source-runtime-evidence
+          name: source-runtime-evidence-${{ matrix.runner }}
           path: |
             artifacts/source-build.log
             artifacts/source-undefined.txt
             artifacts/source-*-symbols.txt
+            artifacts/source-*-run.log
+            artifacts/source-manifest.json
           if-no-files-found: warn

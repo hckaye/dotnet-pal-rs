@@ -11,10 +11,13 @@ compile_error!("select a backend: linux, host or linear");
 compile_error!("the linux backend supports Linux only; use host or linear");
 #[cfg(not(target_has_atomic = "ptr"))]
 compile_error!("this implementation requires pointer-width atomics (not 64-bit atomics)");
+#[cfg(all(feature = "wasi-clock", not(all(feature = "linear", target_arch = "wasm32", target_os = "wasi", target_env = "p1"))))]
+compile_error!("wasi-clock requires the linear backend on wasm32-wasip1");
 
 use core::{ffi::c_void, mem, ptr};
 mod counter;
 use counter::Counter;
+pub mod services;
 #[cfg(feature = "linux")]
 #[path = "linux.rs"]
 mod backend;
@@ -80,8 +83,9 @@ pub struct Api {
     pub header: Header,
     pub vm: VmOps,
     pub read_stats: Option<unsafe extern "C" fn(*mut Stats, usize) -> u32>,
-    // Additive ABI 2 extension. Existing prefix and HostApi layout stay unchanged.
+    // Additive ABI 2 extensions. Existing prefix and HostApi layout stay unchanged.
     pub linear: LinearOps,
+    pub services: services::Ops,
 }
 static RESERVE: Counter = Counter::new();
 static COMMIT: Counter = Counter::new();
@@ -214,7 +218,7 @@ mod linear_api {
 static API: Api = Api {
     header: Header {
         abi_version: ABI_VERSION, struct_size: mem::size_of::<Api>() as u32,
-        capabilities: if cfg!(feature = "linear") { CAP_LINEAR } else { CAP_VM },
+        capabilities: (if cfg!(feature = "linear") { CAP_LINEAR } else { CAP_VM }) | services::CAPABILITIES,
     },
     #[cfg(not(feature = "linear"))]
     vm: vm::OPS,
@@ -225,11 +229,12 @@ static API: Api = Api {
     linear: linear_api::OPS,
     #[cfg(not(feature = "linear"))]
     linear: LinearOps { granularity: None, capacity: None, allocate: None, zero: None, release: None, read_stats: None },
+    services: services::OPS,
 };
 /// The only runtime-facing PAL entry point. Valid before managed runtime startup.
 #[no_mangle]
 pub extern "C" fn dotnet_pal_get_api(version: u32) -> *const Api {
-    if version != ABI_VERSION { return ptr::null(); }
+    if version != ABI_VERSION || !services::available() { return ptr::null(); }
     #[cfg(not(feature = "linear"))]
     if !backend::page_size().is_power_of_two() { return ptr::null(); }
     &API

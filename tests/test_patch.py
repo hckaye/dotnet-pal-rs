@@ -9,16 +9,25 @@ spec.loader.exec_module(patch)
 
 class PatchTests(unittest.TestCase):
     def fixture(self):
-        functions = "\n".join(f"bool GCToOSInterface::{name}(void)\n{{\n    return false;\n}}\n" for name in patch.CALLS)
+        functions = "\n".join(f"bool GCToOSInterface::{name}(void)\n{{\n    return false;\n}}\n" for name in (patch.CALLS | patch.SERVICE_CALLS))
         helpers = "\n".join(f"static bool {name}(void)\n{{\n    return true;\n}}\n" for name in patch.HELPERS)
         return helpers + functions
 
-    def test_six_guarded_replacements(self):
+    def test_eleven_guarded_replacements(self):
         result = patch.patch_gc(self.fixture())
-        self.assertEqual(result.count("#else"), 6)
+        self.assertEqual(result.count("#else"), 11)
         self.assertEqual(result.count("#ifndef DOTNET_PAL_GC_VM"), 2)
         self.assertEqual(result.count("return dotnet_pal_gc::"), 6)
-        self.assertEqual(result.count("return false;"), 6)
+        self.assertEqual(result.count("return dotnet_pal_gc_services::"), 5)
+        self.assertEqual(result.count("return false;"), 11)
+
+    def test_service_return_types_and_missing_service(self):
+        text = self.fixture().replace("bool GCToOSInterface::Sleep", "void GCToOSInterface::Sleep")
+        text = text.replace("bool GCToOSInterface::QueryPerformanceCounter", "int64_t GCToOSInterface::QueryPerformanceCounter")
+        text = text.replace("bool GCToOSInterface::GetLowPrecisionTimeStamp", "uint64_t GCToOSInterface::GetLowPrecisionTimeStamp")
+        self.assertIn("return dotnet_pal_gc_services::counter()", patch.patch_gc(text))
+        with self.assertRaises(ValueError):
+            patch.patch_gc(text.replace("::YieldThread(", "::OtherFunction("))
 
     def test_refuse_partial_or_duplicate_input(self):
         with self.assertRaises(ValueError):

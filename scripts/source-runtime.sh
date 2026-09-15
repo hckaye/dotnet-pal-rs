@@ -11,21 +11,17 @@ mkdir -p artifacts
 python3 integration/dotnet10/patch_runtime.py "$runtime" --check
 python3 integration/dotnet10/patch_runtime.py "$runtime"
 # Build the complete native NativeAOT component, not the compiler/BCL or CoreCLR.
-# Published compiler/BCL and rebuilt native runtime are both pinned to v10.0.0.
 "$runtime/src/coreclr/build-runtime.sh" -release -arch "$arch" -component nativeaot -ninja \
   -cmakeargs "-DDOTNET_PAL_ROOT=$root" 2>&1 | tee artifacts/source-build.log
 mapfile -t archives < <(find "$runtime/artifacts/bin/coreclr" -name libRuntime.WorkstationGC.a -type f)
 [[ ${#archives[@]} == 1 ]] || { printf 'Expected one rebuilt archive, got %s\n' "${archives[*]}" >&2; exit 1; }
 rebuilt=${archives[0]}
-# Independent proof that the archive calls our boundary, not just that the patch applied.
 nm -u "$rebuilt" > artifacts/source-undefined.txt
 grep -q 'dotnet_pal_get_api' artifacts/source-undefined.txt
 bash scripts/nativeaot.sh
-# nativeaot.sh records the actual published SDK path selected by MSBuild.
 original=$(python3 -c 'from pathlib import Path; print(Path("artifacts/runtime-archive.txt").read_text(encoding="utf-8-sig").strip())')
 overlay="$root/artifacts/source-sdk"
 mkdir -p "$overlay"
-# Fresh destination required; no modifications to the NuGet cache or source checkout.
 [[ ! -e "$overlay/libRuntime.WorkstationGC.a" ]] || { echo 'Remove artifacts/source-sdk before rerunning' >&2; exit 1; }
 cp -as "$(dirname "$original")/." "$overlay/"
 rm "$overlay/libRuntime.WorkstationGC.a"
@@ -41,12 +37,17 @@ Path("artifacts/source-manifest.json").write_text(json.dumps(manifest, indent=2)
 PYMANIFEST
 clang++ -std=c++17 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
   -DDOTNET_PAL_OBSERVER_ONLY -Iinclude -Inative -c integration/dotnet10/gc_wrap.cpp -o artifacts/gc_observer.o
+# The source adapter now requires clock/scheduling services as well as VM.
+# Keep the legacy VM-only --wrap negative/positive tests above unchanged.
+cargo build --release --no-default-features --features host-services --target-dir target/host-services
+clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/services_host.c -o artifacts/services_host.o
+clang -r artifacts/host_backend.o artifacts/services_host.o -o artifacts/host_services_backend.o
 for backend in linux host; do
   pal="$root/target/release/libdotnet_pal_rs.a"
   host_args=()
   if [[ "$backend" == host ]]; then
-    pal="$root/target/host/release/libdotnet_pal_rs.a"
-    host_args=("-p:PalHostObject=$root/artifacts/host_backend.o")
+    pal="$root/target/host-services/release/libdotnet_pal_rs.a"
+    host_args=("-p:PalHostObject=$root/artifacts/host_services_backend.o")
   fi
   rm -rf samples/GcProbe/obj/Release samples/GcProbe/bin/Release
   dotnet publish samples/GcProbe/GcProbe.csproj -r "linux-$arch" -c Release \
@@ -60,7 +61,7 @@ for backend in linux host; do
     echo 'Unexpected --wrap helper in the source configuration' >&2; exit 1
   fi
   DOTNET_GCHeapHardLimit=0x20000000 DOTNET_GCServer=0 DOTNET_GCLargePages=0 \
-    COMPlus_gcServer=0 COMPlus_GCLargePages=0 timeout 120s "$binary" wrapped \
+    COMPlus_gcServer=0 COMPlus_GCLargePages=0 timeout 120s "$binary" source-services \
     | tee "artifacts/source-$backend-run.log"
-  echo "SOURCE RUNTIME PASS backend=$backend (no --wrap, native runtime rebuilt)"
+  echo "SOURCE RUNTIME PASS backend=$backend (VM and services, no --wrap, native runtime rebuilt)"
 done

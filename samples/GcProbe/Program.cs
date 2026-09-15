@@ -11,6 +11,19 @@ internal static class Program
     [DllImport("__Internal", EntryPoint = "dotnet_pal_probe_stats")]
     private static extern uint ReadStats(out Stats stats, nuint size);
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ServicesStats
+    {
+        public ulong Clock, Sleep, Yield, Failed;
+    }
+    [DllImport("__Internal", EntryPoint = "dotnet_pal_probe_services_stats")]
+    private static extern uint ReadServicesStats(out ServicesStats stats, nuint size);
+    private static ServicesStats ServicesSnapshot()
+    {
+        if (ReadServicesStats(out ServicesStats stats, (nuint)Marshal.SizeOf<ServicesStats>()) != 0)
+            throw new InvalidOperationException("services observer unavailable");
+        return stats;
+    }
     private static Stats Snapshot()
     {
         if (ReadStats(out Stats stats, (nuint)Marshal.SizeOf<Stats>()) != 0)
@@ -46,10 +59,12 @@ internal static class Program
     }
     public static int Main(string[] args)
     {
-        bool wrapped = args.Length == 1 && args[0] == "wrapped";
-        Require(wrapped || (args.Length == 1 && args[0] == "baseline"), "expected wrapped or baseline");
+        bool sourceServices = args.Length == 1 && args[0] == "source-services";
+        bool wrapped = sourceServices || (args.Length == 1 && args[0] == "wrapped");
+        Require(wrapped || (args.Length == 1 && args[0] == "baseline"), "expected wrapped, baseline or source-services");
         Require(!RuntimeFeature.IsDynamicCodeSupported, "must run the published NativeAOT executable");
         Stats before = Snapshot();
+        ServicesStats servicesBefore = ServicesSnapshot();
         for (int wave = 0; wave < 3; wave++)
         {
             AllocateWave();
@@ -70,6 +85,19 @@ internal static class Program
                 after.Release == 0 && after.Reset == 0 && after.Failed == 0,
                 "negative control unexpectedly used the Rust VM boundary");
         }
+        ServicesStats servicesAfter = ServicesSnapshot();
+        if (sourceServices)
+        {
+            Require(servicesAfter.Clock > servicesBefore.Clock, "GC clock did not pass through Rust");
+            Require(servicesAfter.Failed == 0, "GC service failure");
+        }
+        else
+        {
+            Require(servicesAfter.Clock == 0 && servicesAfter.Sleep == 0 && servicesAfter.Yield == 0 &&
+                servicesAfter.Failed == 0, "service negative control unexpectedly crossed Rust");
+        }
+        Console.WriteLine($"SERVICES PROBE PASS source={sourceServices} clock_before={servicesBefore.Clock} " +
+            $"clock_after={servicesAfter.Clock} sleep={servicesAfter.Sleep} yield={servicesAfter.Yield}");
         Console.WriteLine($"GC PROBE PASS mode={(wrapped ? "wrapped" : "baseline")} " +
             $"reserve={after.Reserve} commit_before={before.Commit} commit_after={after.Commit} " +
             $"decommit={after.Decommit} release={after.Release} reset={after.Reset}");

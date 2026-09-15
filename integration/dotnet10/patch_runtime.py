@@ -22,15 +22,23 @@ CALLS = {
     "VirtualReserveAndCommitLargePages": "dotnet_pal_gc::large_pages(size, node)",
 }
 
+SERVICE_CALLS = {
+    "QueryPerformanceCounter": "dotnet_pal_gc_services::counter()",
+    "QueryPerformanceFrequency": "dotnet_pal_gc_services::frequency()",
+    "GetLowPrecisionTimeStamp": "dotnet_pal_gc_services::lowres_ms()",
+    "Sleep": "dotnet_pal_gc_services::sleep_ms(sleepMSec)",
+    "YieldThread": "dotnet_pal_gc_services::yield_thread(switchCount)",
+}
+
 HELPERS = ("VirtualReserveInner", "VirtualCommitInner")
 
 def patch_gc(text):
     if MARKER in text:
         raise ValueError("source is already patched")
-    for name, call in CALLS.items():
+    for name, call in (CALLS | SERVICE_CALLS).items():
         # In the pinned file, top-level function closing braces start at column 0.
         # Reject missing/duplicate definitions instead of guessing a newer layout.
-        pattern = rf"((?:void\*|bool) GCToOSInterface::{name}\([^\n]*\)\n\{{\n)(.*?)(^\}})"
+        pattern = rf"((?:void\*|bool|void|int64_t|uint64_t) GCToOSInterface::{name}\([^\n]*\)\n\{{\n)(.*?)(^\}})"
         regex = re.compile(pattern, re.DOTALL | re.MULTILINE)
         if len(list(regex.finditer(text))) != 1:
             raise ValueError(f"expected exactly one pinned definition of {name}")
@@ -41,7 +49,7 @@ def patch_gc(text):
         if len(list(regex.finditer(text))) != 1:
             raise ValueError(f"expected exactly one pinned helper {name}")
         text = regex.sub(lambda m: f"#ifndef {MARKER}\n" + m[0] + "\n#endif", text)
-    return f'#ifdef {MARKER}\n#include "gc_vm_adapter.h"\n#endif\n\n' + text
+    return f'#ifdef {MARKER}\n#include "gc_vm_adapter.h"\n#include "gc_services_adapter.h"\n#endif\n\n' + text
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -57,7 +65,7 @@ def main():
     cmake = (root / CMAKE_FILE).read_text()
     if MARKER in cmake:
         raise SystemExit("CMake is already patched")
-    cmake = '''# Experimental NativeAOT-only GC VM adapter. Other runtimes remain unchanged.
+    cmake = '''# Experimental NativeAOT-only GC VM and OS-service adapter. Other runtimes remain unchanged.
 if(DOTNET_PAL_ROOT)
   if(NOT CLR_CMAKE_TARGET_LINUX)
     message(FATAL_ERROR "This source integration has only been prepared for Linux")
@@ -70,7 +78,7 @@ endif()
     if not args.check:
         (root / GC_FILE).write_text(gc)
         (root / CMAKE_FILE).write_text(cmake)
-    print("Source adapter: six GC VM definitions validated" + (" (check only)" if args.check else " and patched"))
+    print("Source adapter: six GC VM and five clock/scheduling definitions validated" + (" (check only)" if args.check else " and patched"))
 
 if __name__ == "__main__":
     main()

@@ -31,3 +31,11 @@ extern "C" uint32_t dotnet_pal_probe_stats(dotnet_pal_stats *out, size_t size) {
     const auto *p = dotnet_pal_gc::api();
     return p && p->read_stats ? p->read_stats(out, size) : DOTNET_PAL_UNSUPPORTED;
 }
+
+// Observation only: this never calls the clock or scheduler operations.
+extern "C" uint32_t dotnet_pal_probe_services_stats(dotnet_pal_services_stats *out, size_t size) {
+    const auto *p = dotnet_pal_get_api(DOTNET_PAL_ABI_VERSION);
+    if (!p || p->header.struct_size < DOTNET_PAL_SERVICES_API_SIZE || !p->services.read_stats)
+        return DOTNET_PAL_UNSUPPORTED;
+    return p->services.read_stats(out, size);
+}
