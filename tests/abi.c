@@ -47,7 +47,8 @@ int main(void) {
     api = dotnet_pal_get_api(DOTNET_PAL_ABI_VERSION);
     assert(api && api->header.abi_version == DOTNET_PAL_ABI_VERSION);
     assert(api->header.struct_size == sizeof(*api));
-    assert(api->header.capabilities == DOTNET_PAL_CAP_VM);
+    assert((api->header.capabilities & (DOTNET_PAL_CAP_VM | DOTNET_PAL_CAP_LINEAR)) == DOTNET_PAL_CAP_VM);
+    assert(!api->linear.allocate && !api->linear.release);
     size_t page = api->vm.page_size();
     assert(page > 0 && (page & (page - 1)) == 0);
     void *p = (void *)1;
