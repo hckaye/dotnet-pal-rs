@@ -2,7 +2,7 @@ name: llvm-managed-investigation
 on:
   workflow_dispatch:
   push:
-    paths: ['.github/workflows/llvm-investigation.yml', 'scripts/llvm-investigate.sh', 'samples/LlvmGcProbe/**']
+    paths: ['.github/workflows/llvm-investigation.yml', 'scripts/llvm-investigate.sh', 'samples/LlvmGcProbe/**', 'integration/llvm-wasi/**']
 permissions:
   contents: read
 jobs:
@@ -19,110 +19,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Prepare SDK and execute real managed baseline
+      - name: Verify WASI SDK and execute managed baseline
         shell: bash
         env:
           NUGET_PACKAGES: ${{ runner.temp }}/llvm-packages
-          MSBuildEnableWorkloadResolver: 'false'
         run: |
           set -euo pipefail
           mkdir -p artifacts/llvm "$RUNNER_TEMP/llvm-sdk"
           curl --fail --location --retry 3 --max-time 300 https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-29/wasi-sdk-29.0-x86_64-linux.tar.gz -o "$RUNNER_TEMP/llvm-sdk/sdk.tar.gz"
-          sha256sum "$RUNNER_TEMP/llvm-sdk/sdk.tar.gz" | tee artifacts/llvm/sdk-sha256.txt
+          printf '87d1d1a2879d139cdc624b968efad3d4a97b8078cdff95e63ac88ecafd1a0171  %s\n' "$RUNNER_TEMP/llvm-sdk/sdk.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/llvm-sdk/sdk.tar.gz" -C "$RUNNER_TEMP/llvm-sdk"
           export WASI_SDK_PATH="$RUNNER_TEMP/llvm-sdk/wasi-sdk-29.0-x86_64-linux"
-          mkdir -p artifacts/llvm/project
-          cat > artifacts/llvm/project/Probe.csproj <<'PROJECT'
-          <Project Sdk="Microsoft.NET.Sdk">
-            <PropertyGroup>
-              <OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework>
-              <PublishTrimmed>true</PublishTrimmed><SelfContained>true</SelfContained>
-              <MSBuildEnableWorkloadResolver>false</MSBuildEnableWorkloadResolver>
-              <UseAppHost>false</UseAppHost><InvariantGlobalization>true</InvariantGlobalization>
-              <InvariantTimezone>true</InvariantTimezone><LinkerFlavor>lld</LinkerFlavor>
-              <IlcLlvmExceptionHandlingModel>emulated</IlcLlvmExceptionHandlingModel>
-              <IlcTreatWarningsAsErrors>true</IlcTreatWarningsAsErrors>
-            </PropertyGroup>
-            <ItemGroup>
-              <PackageReference Include="Microsoft.DotNet.ILCompiler.LLVM" Version="10.0.0-*" />
-              <PackageReference Include="runtime.linux-x64.Microsoft.DotNet.ILCompiler.LLVM" Version="10.0.0-*" />
-            </ItemGroup>
-            <Target Name="RecordCompilerRuntime" BeforeTargets="LinkNativeLlvm">
-              <WriteLinesToFile File="$(MSBuildThisFileDirectory)../runtime-archive.txt" Lines="$(IlcSdkPath)libPortableRuntime.a" Overwrite="true" />
-            </Target>
-          </Project>
-          PROJECT
-          cat > artifacts/llvm/project/NuGet.config <<'NUGET'
-          <configuration><packageSources><clear />
-          <add key="experimental" value="https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-experimental/nuget/v3/index.json" />
-          <add key="nuget" value="https://api.nuget.org/v3/index.json" />
-          </packageSources></configuration>
-          NUGET
-          cat > artifacts/llvm/project/Program.cs <<'CS'
-          using System;
-          using System.Runtime.CompilerServices;
-          public static class Program {
-            public static int Main() {
-              if (RuntimeFeature.IsDynamicCodeSupported) throw new Exception("AOT required");
-              long checksum = 0; int caught = 0;
-              for (int wave = 0; wave < 8; ++wave) {
-                var live = new byte[64][];
-                for (int i = 0; i < live.Length; ++i) {
-                  live[i] = new byte[8192];
-                  if (live[i][0] != 0 || live[i][8191] != 0) throw new Exception("not zeroed");
-                  live[i][0] = (byte)i; live[i][8191] = 73;
-                }
-                GC.Collect();
-                for (int i = 0; i < live.Length; ++i) {
-                  if (live[i][0] != (byte)i || live[i][8191] != 73) throw new Exception("root corruption");
-                  checksum += live[i][0];
-                }
-                GC.KeepAlive(live);
-                try { throw new ApplicationException("EH probe"); }
-                catch (ApplicationException) { ++caught; }
-              }
-              if (caught != 8 || checksum != 16128) throw new Exception("accounting");
-              Console.WriteLine("MANAGED WASI BASELINE PASS checksum=" + checksum + " catches=" + caught);
-              return 0;
-            }
-          }
-          CS
-          dotnet restore artifacts/llvm/project/Probe.csproj -r wasi-wasm
-          python3 - <<'PY'
-          import hashlib, json, os
-          from pathlib import Path
-          p=Path('artifacts/llvm/project/obj/project.assets.json')
-          data=json.loads(p.read_text())
-          chosen={k:v for k,v in data['libraries'].items() if 'ilcompiler.llvm' in k.lower()}
-          versions={k.split('/')[-1] for k in chosen}
-          if len(versions)!=1 or len(chosen)!=2: raise SystemExit('LLVM packages must match: '+str(chosen))
-          version=versions.pop()
-          project=Path('artifacts/llvm/project/Probe.csproj')
-          project.write_text(project.read_text().replace('10.0.0-*',version))
-          hashes={}
-          for key in chosen:
-            name,v=key.lower().split('/')
-            nupkg=Path(os.environ['NUGET_PACKAGES'])/name/v/(name+'.'+v+'.nupkg')
-            with nupkg.open('rb') as f: hashes[key]=hashlib.file_digest(f,'sha256').hexdigest()
-          report={'llvm_version':version,'packages_sha256':hashes,'scope':'discovery baseline, no Rust GC interposition yet'}
-          Path('artifacts/llvm/compiler-inputs.json').write_text(json.dumps(report,indent=2)+'\n')
-          print(json.dumps(report))
-          PY
-          dotnet publish artifacts/llvm/project/Probe.csproj -r wasi-wasm -c Release -o artifacts/llvm/publish 2>&1 | tee artifacts/llvm/build.log
-          runtime=$(python3 -c 'from pathlib import Path; print(Path("artifacts/llvm/runtime-archive.txt").read_text(encoding="utf-8-sig").strip())')
-          "$WASI_SDK_PATH/bin/llvm-nm" --defined-only "$runtime" > artifacts/llvm/defined-symbols.txt
-          grep -E 'GCToOSInterface.*(Virtual|Performance|Stamp)' artifacts/llvm/defined-symbols.txt || true
-          cat > artifacts/llvm/run.mjs <<'JS'
-          import { readFile } from 'node:fs/promises';
-          import { WASI } from 'node:wasi';
-          const wasi = new WASI({version:'preview1',args:['Probe'],env:{DOTNET_GCHeapHardLimit:'0x4000000'},returnOnExit:true});
-          const module = await WebAssembly.compile(await readFile('artifacts/llvm/publish/Probe.wasm'));
-          console.log('IMPORTS',JSON.stringify(WebAssembly.Module.imports(module)));
-          const instance=await WebAssembly.instantiate(module,{wasi_snapshot_preview1:wasi.wasiImport});
-          const result=wasi.start(instance);
-          if (result!==0) throw new Error('managed process failed '+result);
-          JS
-          node artifacts/llvm/run.mjs | tee artifacts/llvm/run.log
+          bash scripts/llvm-investigate.sh
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
