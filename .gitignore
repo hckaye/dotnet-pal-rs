@@ -1,0 +1,7 @@
+/target/
+/artifacts/
+**/bin/
+**/obj/
+**/__pycache__/
+/core
+/core.*

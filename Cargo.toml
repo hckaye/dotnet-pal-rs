@@ -1,17 +1,27 @@
 [package]
 name = "dotnet-pal-rs"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "Experimental Rust PAL for NativeAOT portability research"
+rust-version = "1.85"
+description = "Experimental no_std OS boundary for NativeAOT portability research"
 license = "MIT"
 
 [lib]
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["staticlib", "rlib"]
+
+[features]
+default = ["linux"]
+linux = ["dep:libc"]
+host = []
 
 [dependencies]
-libc = "0.2"
+libc = { version = "=0.2.169", default-features = false, optional = true }
+
+[profile.dev]
+panic = "abort"
 
 [profile.release]
 panic = "abort"
-lto = true
+# Keep native objects usable by the vendor linker, without Rust LLVM bitcode LTO.
+lto = false
 codegen-units = 1

@@ -1,0 +1,48 @@
+name: boundary-poc
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal
+          rustup override set 1.85.1
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.100'
+      - name: Native prerequisites
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev binutils
+      - name: Boundary and adapter tests
+        run: bash scripts/check.sh
+      - name: Actual NativeAOT GC negative and positive controls
+        run: bash scripts/nativeaot.sh
+      - name: Freestanding ARM64 compile (not console execution)
+        run: |
+          rustup target add aarch64-unknown-none
+          cargo build --release --no-default-features --features host --target aarch64-unknown-none
+      - uses: actions/checkout@v4
+        with:
+          repository: dotnet/runtime
+          ref: 60629d14374c56f1cb51819049ad1fa529307f8d
+          path: artifacts/runtime
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /src/coreclr/gc/unix/gcenv.unix.cpp
+            /src/coreclr/nativeaot/Runtime/CMakeLists.txt
+      - name: Validate source-patch applicability, not a runtime source build
+        run: |
+          python3 integration/dotnet10/patch_runtime.py artifacts/runtime --check
+          python3 integration/dotnet10/patch_runtime.py artifacts/runtime
+          git -C artifacts/runtime diff --check

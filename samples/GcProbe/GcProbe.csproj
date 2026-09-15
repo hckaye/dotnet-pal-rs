@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RuntimeFrameworkVersion>10.0.0</RuntimeFrameworkVersion>
+    <PublishAot>true</PublishAot>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <StripSymbols>false</StripSymbols>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
+    <PalRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))</PalRoot>
+    <PalLib Condition="'$(PalLib)' == ''">$(PalRoot)/target/release/libdotnet_pal_rs.a</PalLib>
+    <PalWrap Condition="'$(PalWrap)' == ''">true</PalWrap>
+  </PropertyGroup>
+  <ItemGroup>
+    <DirectPInvoke Include="__Internal" />
+    <NativeLibrary Include="$(PalRoot)/artifacts/gc_wrap.o" />
+    <NativeLibrary Include="$(PalLib)" />
+    <NativeLibrary Include="$(PalHostObject)" Condition="'$(PalHostObject)' != ''" />
+  </ItemGroup>
+  <Import Project="../../artifacts/wrap.props" Condition="'$(PalWrap)' == 'true'" />
+</Project>
