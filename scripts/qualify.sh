@@ -10,7 +10,7 @@ ulimit -c 0
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -c tests/qualification_native.c -o artifacts/qualification_native.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -DPAL_FAULT_PROVIDER -c tests/qualification_native.c -o artifacts/qualification_fault_native.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/host_fault_backend.c -o artifacts/host_fault.o
-clang -r artifacts/host_fault.o artifacts/services_host.o artifacts/kernel_host.o -o artifacts/host_fault_all.o
+clang -r artifacts/host_fault.o artifacts/services_host.o artifacts/kernel_host.o artifacts/runtime_host.o -o artifacts/host_fault_all.o
 export DOTNET_GCLargePages=0 COMPlus_GCLargePages=0
 # RhConfig parses hex digits only; 0x-prefixed values are rejected silently upstream.
 # Apply the cap to child probes only, not the compiler process.

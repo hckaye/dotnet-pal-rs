@@ -118,6 +118,51 @@ typedef struct {
     dotnet_pal_kernel_ops ops;
 } dotnet_pal_host_kernel;
 
+/* Runtime extension. All string inputs are byte borrows, not NUL-terminated.
+ * Input/output buffers must not overlap. No environment mutation may run in
+ * parallel with environment_get. required includes NUL on OK/BUFFER_TOO_SMALL.
+ * NOT_FOUND is distinct from an empty value. Failed output buffers are sanitized.
+ * ModuleInfo.name is a borrowed NUL-terminated name, valid while its module stays
+ * loaded; the caller prevents concurrent module unload. No function is promised
+ * async-signal-safe. Mappings are explicit native storage, not GC reservations.
+ */
+#define DOTNET_PAL_BUFFER_TOO_SMALL 7u
+#define DOTNET_PAL_NOT_FOUND 8u
+#define DOTNET_PAL_CAP_ENVIRONMENT UINT64_C(1024)
+#define DOTNET_PAL_CAP_IDENTITY UINT64_C(2048)
+#define DOTNET_PAL_CAP_REALTIME UINT64_C(4096)
+#define DOTNET_PAL_CAP_ENTROPY UINT64_C(8192)
+#define DOTNET_PAL_CAP_NATIVE_MEMORY UINT64_C(16384)
+#define DOTNET_PAL_CAP_MODULES UINT64_C(32768)
+#define DOTNET_PAL_CAP_RUNTIME UINT64_C(64512)
+#define DOTNET_PAL_READ 1u
+#define DOTNET_PAL_WRITE 2u
+#define DOTNET_PAL_EXECUTE 4u
+#define DOTNET_PAL_MAX_NAME 4095u
+
+typedef struct { void *base; const uint8_t *name; size_t name_length; } dotnet_pal_module_info;
+typedef struct {
+    uint64_t environment_ok, identity_ok, realtime_ok, entropy_ok;
+    uint64_t mapping_allocate_ok, mapping_release_ok, mapping_protect_ok;
+    uint64_t module_open_ok, module_symbol_ok, module_close_ok, module_info_ok, rejected_or_failed;
+} dotnet_pal_runtime_stats;
+typedef struct {
+    uint32_t (*environment_get)(const uint8_t*, size_t, uint8_t*, size_t, size_t*);
+    uint32_t (*process_id)(uint64_t*);
+    uint32_t (*thread_id)(uint64_t*);
+    uint32_t (*realtime_ns)(uint64_t*);
+    uint32_t (*random_bytes)(uint8_t*, size_t);
+    uint32_t (*mapping_allocate)(size_t, uint32_t, void**);
+    uint32_t (*mapping_release)(void*, size_t);
+    uint32_t (*mapping_protect)(void*, size_t, uint32_t);
+    uint32_t (*module_open)(const uint8_t*, size_t, void**);
+    uint32_t (*module_symbol)(void*, const uint8_t*, size_t, void**);
+    uint32_t (*module_close)(void*);
+    uint32_t (*module_info)(void*, dotnet_pal_module_info*);
+    uint32_t (*read_stats)(dotnet_pal_runtime_stats*, size_t);
+} dotnet_pal_runtime_ops;
+typedef struct { dotnet_pal_header header; dotnet_pal_runtime_ops ops; } dotnet_pal_host_runtime;
+
 typedef struct {
     dotnet_pal_header header;
     dotnet_pal_vm_ops vm;
@@ -126,10 +171,12 @@ typedef struct {
     /* ABI 2 append-only extension. All preceding offsets stay unchanged. */
     dotnet_pal_services_ops services;
     dotnet_pal_kernel_ops kernel;
+    dotnet_pal_runtime_ops runtime;
 } dotnet_pal_api;
 
 /* Use size checks BEFORE reading a capability group from a foreign table.
  * Each size marks the END of that group, not sizeof a future extended API. */
+#define DOTNET_PAL_RUNTIME_API_SIZE (offsetof(dotnet_pal_api, runtime) + sizeof(dotnet_pal_runtime_ops))
 #define DOTNET_PAL_VM_API_SIZE offsetof(dotnet_pal_api, linear)
 #define DOTNET_PAL_LINEAR_API_SIZE offsetof(dotnet_pal_api, services)
 #define DOTNET_PAL_KERNEL_API_SIZE (offsetof(dotnet_pal_api, kernel) + sizeof(dotnet_pal_kernel_ops))
@@ -160,6 +207,8 @@ const dotnet_pal_host_api *dotnet_pal_host_v2(void);
 const dotnet_pal_host_services *dotnet_pal_host_services_v2(void);
 /* Required only for host-kernel; legacy providers need no new symbols. */
 const dotnet_pal_host_kernel *dotnet_pal_host_kernel_v2(void);
+/* Required only by host-runtime. */
+const dotnet_pal_host_runtime *dotnet_pal_host_runtime_v2(void);
 #if defined(__cplusplus)
 [[noreturn]] void dotnet_pal_host_abort(void);
 #else

@@ -33,6 +33,8 @@ jobs:
         run: bash scripts/services.sh
       - name: Synchronization, thread, TLS, stack and process-barrier contracts
         run: bash scripts/kernel.sh
+      - name: Runtime OS services and host contracts
+        run: bash scripts/runtime.sh
       - name: Actual NativeAOT GC negative and positive controls
         run: bash scripts/nativeaot.sh
       - name: Freestanding ARM64 boundary compile
