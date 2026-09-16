@@ -22,6 +22,7 @@ host-services = ["host"]
 host-kernel = ["host-services"]
 host-runtime = ["host-kernel"]
 wasi-runtime = ["wasi-clock"]
+wasi-dispatch = ["wasi-runtime"]
 wasi-clock = ["linear"]
 
 [dependencies]

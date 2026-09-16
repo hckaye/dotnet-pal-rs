@@ -87,6 +87,7 @@ jobs:
         run: |
           bash scripts/wasi-clock.sh
           bash scripts/wasi-runtime.sh
+          bash scripts/wasi-bridge.sh
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:

@@ -52,3 +52,9 @@ extern "C" uint32_t dotnet_pal_linear_probe_stats(dotnet_pal_linear_stats *stora
 extern "C" uint64_t dotnet_pal_linear_probe_capacity() {
     return dotnet_pal_gc_linear::require()->linear.capacity();
 }
+
+extern "C" uint32_t dotnet_pal_wasi_probe_stats(dotnet_pal_wasi_stats *out, size_t size) {
+    const auto *a = dotnet_pal_get_api(DOTNET_PAL_ABI_VERSION);
+    if (!a || a->header.struct_size < DOTNET_PAL_WASI_API_SIZE || !a->wasi.read_stats) return DOTNET_PAL_UNSUPPORTED;
+    return a->wasi.read_stats(out, size);
+}

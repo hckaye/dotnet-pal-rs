@@ -163,6 +163,17 @@ typedef struct {
 } dotnet_pal_runtime_ops;
 typedef struct { dotnet_pal_header header; dotnet_pal_runtime_ops ops; } dotnet_pal_host_runtime;
 
+/* Optional complete raw WASIp1 transport. errno values are WASI 0..76,
+ * NOT dotnet_pal status codes. Arguments are canonical 64-bit slots; wasm32
+ * offsets and u32 values must fit in 32 bits. No implicit host fallback exists.
+ */
+#define DOTNET_PAL_CAP_WASI_DISPATCH UINT64_C(65536)
+typedef struct { uint64_t calls, rejected, host_errors; } dotnet_pal_wasi_stats;
+typedef struct {
+    uint32_t (*invoke)(uint32_t opcode, const uint64_t *args, uint32_t argc);
+    uint64_t (*call_count)(uint32_t opcode);
+    uint32_t (*read_stats)(dotnet_pal_wasi_stats*, size_t);
+} dotnet_pal_wasi_ops;
 typedef struct {
     dotnet_pal_header header;
     dotnet_pal_vm_ops vm;
@@ -172,10 +183,12 @@ typedef struct {
     dotnet_pal_services_ops services;
     dotnet_pal_kernel_ops kernel;
     dotnet_pal_runtime_ops runtime;
+    dotnet_pal_wasi_ops wasi;
 } dotnet_pal_api;
 
 /* Use size checks BEFORE reading a capability group from a foreign table.
  * Each size marks the END of that group, not sizeof a future extended API. */
+#define DOTNET_PAL_WASI_API_SIZE (offsetof(dotnet_pal_api, wasi) + sizeof(dotnet_pal_wasi_ops))
 #define DOTNET_PAL_RUNTIME_API_SIZE (offsetof(dotnet_pal_api, runtime) + sizeof(dotnet_pal_runtime_ops))
 #define DOTNET_PAL_VM_API_SIZE offsetof(dotnet_pal_api, linear)
 #define DOTNET_PAL_LINEAR_API_SIZE offsetof(dotnet_pal_api, services)

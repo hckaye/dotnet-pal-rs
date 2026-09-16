@@ -20,6 +20,7 @@ use counter::Counter;
 pub mod services;
 pub mod kernel;
 pub mod runtime;
+pub mod wasi;
 #[cfg(feature = "linux")]
 #[path = "linux.rs"]
 mod backend;
@@ -90,6 +91,7 @@ pub struct Api {
     pub services: services::Ops,
     pub kernel: kernel::Ops,
     pub runtime: runtime::Ops,
+    pub wasi: wasi::Ops,
 }
 static RESERVE: Counter = Counter::new();
 static COMMIT: Counter = Counter::new();
@@ -222,7 +224,7 @@ mod linear_api {
 const API_BASE: Api = Api {
     header: Header {
         abi_version: ABI_VERSION, struct_size: mem::size_of::<Api>() as u32,
-        capabilities: (if cfg!(feature = "linear") { CAP_LINEAR } else { CAP_VM }) | services::CAPABILITIES | kernel::CAPABILITIES | runtime::CAPABILITIES,
+        capabilities: (if cfg!(feature = "linear") { CAP_LINEAR } else { CAP_VM }) | services::CAPABILITIES | kernel::CAPABILITIES | runtime::CAPABILITIES | wasi::CAPABILITIES,
     },
     #[cfg(not(feature = "linear"))]
     vm: vm::OPS,
@@ -236,6 +238,7 @@ const API_BASE: Api = Api {
     services: services::OPS,
     kernel: kernel::OPS,
     runtime: runtime::OPS,
+    wasi: wasi::OPS,
 };
 static API: Api = API_BASE;
 #[cfg(feature = "linux")]

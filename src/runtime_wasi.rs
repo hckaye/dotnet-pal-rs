@@ -2,6 +2,7 @@
 //! Environment snapshots are explicitly bounded to 256 entries and 16 KiB; an
 //! oversized host snapshot fails instead of silently omitting variables.
 use super::*;
+#[cfg(not(feature="wasi-dispatch"))]
 #[link(wasm_import_module="wasi_snapshot_preview1")]
 extern "C" {
     fn environ_sizes_get(count: *mut usize, size: *mut usize) -> u16;
@@ -43,3 +44,13 @@ static OPS: Ops = Ops {
     environment_get: Some(environment_get), realtime_ns: Some(realtime_ns), random_bytes: Some(random_bytes), ..EMPTY
 };
 pub fn ops() -> Option<&'static Ops> { Some(&OPS) }
+#[cfg(feature="wasi-dispatch")]
+use crate::wasi::{call, schema};
+#[cfg(feature="wasi-dispatch")]
+unsafe fn environ_sizes_get(count: *mut usize, size: *mut usize) -> u16 { unsafe { call(schema::ENVIRON_SIZES_GET, &[count as u64,size as u64]) } }
+#[cfg(feature="wasi-dispatch")]
+unsafe fn environ_get(entries: *mut *mut u8, bytes: *mut u8) -> u16 { unsafe { call(schema::ENVIRON_GET,&[entries as u64,bytes as u64]) } }
+#[cfg(feature="wasi-dispatch")]
+unsafe fn clock_time_get(id:u32, precision:u64, out:*mut u64) -> u16 { unsafe { call(schema::CLOCK_TIME_GET,&[id as u64,precision,out as u64]) } }
+#[cfg(feature="wasi-dispatch")]
+unsafe fn random_get(out:*mut u8, size:usize) -> u16 { unsafe { call(schema::RANDOM_GET,&[out as u64,size as u64]) } }

@@ -8,6 +8,7 @@
     <IlcLlvmExceptionHandlingModel>emulated</IlcLlvmExceptionHandlingModel>
     <IlcTreatWarningsAsErrors>true</IlcTreatWarningsAsErrors>
     <PalRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))</PalRoot>
+    <PalLib Condition="'$(PalLib)' == ''">$(PalRoot)/target/wasm32-wasip1/release/libdotnet_pal_rs.a</PalLib>
     <PalWrap Condition="'$(PalWrap)' == ''">false</PalWrap>
   </PropertyGroup>
   <ItemGroup>
@@ -18,7 +19,8 @@
     <LinkerArg Include="-Wl,--max-memory=134217728" />
     <NativeLibrary Include="$(PalRoot)/artifacts/llvm/p1_error_text.o" />
     <NativeLibrary Include="$(PalObserverObject)" />
-    <NativeLibrary Include="$(PalRoot)/target/wasm32-wasip1/release/libdotnet_pal_rs.a" />
+    <NativeLibrary Include="$(PalLib)" />
+    <NativeLibrary Include="$(PalBridgeObject)" Condition="'$(PalBridgeObject)' != ''" />
   </ItemGroup>
   <Import Project="../../artifacts/llvm/wrap.props" Condition="'$(PalWrap)' == 'true'" />
   <Target Name="RecordCompilerRuntime" BeforeTargets="LinkNativeLlvm" DependsOnTargets="SetupOSSpecificProps">

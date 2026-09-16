@@ -153,9 +153,14 @@ mod platform {
     use super::*;
     // WASI Preview 1: clockid monotonic=1, timestamps/precision are u64 nanoseconds.
     // No WASI libc, filesystem, environment, scheduling or allocator imports.
+    #[cfg(not(feature="wasi-dispatch"))]
     #[link(wasm_import_module = "wasi_snapshot_preview1")]
     extern "C" {
         fn clock_time_get(clock: u32, precision: u64, out: *mut u64) -> u16;
+    }
+    #[cfg(feature="wasi-dispatch")]
+    unsafe fn clock_time_get(id:u32, precision:u64, out:*mut u64) -> u16 {
+        unsafe { crate::wasi::call(crate::wasi::schema::CLOCK_TIME_GET,&[id as u64,precision,out as u64]) }
     }
     pub unsafe fn clock(out: &mut u64) -> u32 {
         if unsafe { clock_time_get(1, 1, out) } == 0 { OK } else { OS_ERROR }

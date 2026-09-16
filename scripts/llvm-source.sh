@@ -47,3 +47,5 @@ fi
 timeout 120s node integration/llvm-wasi/run.mjs artifacts/llvm/source/LlvmGcProbe.wasm source 2>&1 \
   | tee artifacts/llvm/source-run.log
 echo 'LLVM SOURCE RUNTIME PASS (compiled native runtime; no linker wrapping)'
+
+bash scripts/llvm-isolated.sh

@@ -13,6 +13,10 @@ public static class Program
     private static extern uint Observe(out StorageStats storage, out AdapterStats adapter, out ServicesStats services);
     [DllImport("__Internal", EntryPoint="pal_p1_error_text_test")]
     private static extern int CheckErrorText();
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WasiStats { public ulong Calls, Rejected, HostErrors; }
+    [DllImport("__Internal", EntryPoint="dotnet_pal_wasi_probe_stats")]
+    private static extern uint ObserveWasi(out WasiStats stats, nuint size);
     private static void Check(bool ok, string message) { if (!ok) throw new Exception(message); }
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static long Wave()
@@ -47,8 +51,11 @@ public static class Program
     }
     private static int Run(string[] args)
     {
-        Check(args.Length == 1 && (args[0] == "baseline" || args[0] == "wrapped" || args[0] == "source"), "expected probe mode");
+        Check(args.Length == 1 && (args[0] == "baseline" || args[0] == "wrapped" || args[0] == "source" || args[0] == "isolated"), "expected probe mode");
         bool wrapped = args[0] != "baseline";
+        WasiStats osBefore = default;
+        if (args[0] == "isolated")
+            Check(ObserveWasi(out osBefore, 24) == 0 && osBefore.Calls > 0, "startup OS calls did not cross Rust");
         Check(!RuntimeFeature.IsDynamicCodeSupported, "AOT required");
         Check(CheckErrorText() == 1, "error conversion failed");
         Check(Observe(out StorageStats storageBefore, out AdapterStats before, out ServicesStats servicesBefore) == 0, "observer failed");
@@ -91,6 +98,12 @@ public static class Program
         Console.WriteLine("MANAGED WASI PASS mode=" + args[0] + " checksum=" + checksum + " catches=" + caught +
             " rust_allocations=" + storageAfter.Allocate + " commits_before=" + before.Commit + " commits_after=" + after.Commit +
             " decommits=" + after.Decommit + " peak_owned=" + after.Peak + " clock=" + servicesAfter.Clock);
+        if (args[0] == "isolated")
+        {
+            Check(ObserveWasi(out WasiStats osAfter, 24) == 0 && osAfter.Calls > osBefore.Calls && osAfter.Rejected == 0,
+                "managed OS operations did not cross the single Rust boundary");
+            Console.WriteLine("MANAGED WASI DISPATCH PASS before=" + osBefore.Calls + " after=" + osAfter.Calls + " host_errors=" + osAfter.HostErrors);
+        }
         return 0;
     }
 }

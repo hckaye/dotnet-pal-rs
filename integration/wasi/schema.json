@@ -1,0 +1,283 @@
+{
+  "version": 1,
+  "request_size": 88,
+  "max_args": 9,
+  "types": {
+    "u": "u32",
+    "p": "wasm32 memory offset",
+    "U": "u64",
+    "I": "i64"
+  },
+  "operations": [
+    {
+      "opcode": 0,
+      "name": "args_get",
+      "arguments": "pp",
+      "noreturn": false
+    },
+    {
+      "opcode": 1,
+      "name": "args_sizes_get",
+      "arguments": "pp",
+      "noreturn": false
+    },
+    {
+      "opcode": 2,
+      "name": "environ_get",
+      "arguments": "pp",
+      "noreturn": false
+    },
+    {
+      "opcode": 3,
+      "name": "environ_sizes_get",
+      "arguments": "pp",
+      "noreturn": false
+    },
+    {
+      "opcode": 4,
+      "name": "clock_res_get",
+      "arguments": "up",
+      "noreturn": false
+    },
+    {
+      "opcode": 5,
+      "name": "clock_time_get",
+      "arguments": "uUp",
+      "noreturn": false
+    },
+    {
+      "opcode": 6,
+      "name": "fd_advise",
+      "arguments": "uUUu",
+      "noreturn": false
+    },
+    {
+      "opcode": 7,
+      "name": "fd_allocate",
+      "arguments": "uUU",
+      "noreturn": false
+    },
+    {
+      "opcode": 8,
+      "name": "fd_close",
+      "arguments": "u",
+      "noreturn": false
+    },
+    {
+      "opcode": 9,
+      "name": "fd_datasync",
+      "arguments": "u",
+      "noreturn": false
+    },
+    {
+      "opcode": 10,
+      "name": "fd_fdstat_get",
+      "arguments": "up",
+      "noreturn": false
+    },
+    {
+      "opcode": 11,
+      "name": "fd_fdstat_set_flags",
+      "arguments": "uu",
+      "noreturn": false
+    },
+    {
+      "opcode": 12,
+      "name": "fd_fdstat_set_rights",
+      "arguments": "uUU",
+      "noreturn": false
+    },
+    {
+      "opcode": 13,
+      "name": "fd_filestat_get",
+      "arguments": "up",
+      "noreturn": false
+    },
+    {
+      "opcode": 14,
+      "name": "fd_filestat_set_size",
+      "arguments": "uU",
+      "noreturn": false
+    },
+    {
+      "opcode": 15,
+      "name": "fd_filestat_set_times",
+      "arguments": "uUUu",
+      "noreturn": false
+    },
+    {
+      "opcode": 16,
+      "name": "fd_pread",
+      "arguments": "upuUp",
+      "noreturn": false
+    },
+    {
+      "opcode": 17,
+      "name": "fd_prestat_get",
+      "arguments": "up",
+      "noreturn": false
+    },
+    {
+      "opcode": 18,
+      "name": "fd_prestat_dir_name",
+      "arguments": "upu",
+      "noreturn": false
+    },
+    {
+      "opcode": 19,
+      "name": "fd_pwrite",
+      "arguments": "upuUp",
+      "noreturn": false
+    },
+    {
+      "opcode": 20,
+      "name": "fd_read",
+      "arguments": "upup",
+      "noreturn": false
+    },
+    {
+      "opcode": 21,
+      "name": "fd_readdir",
+      "arguments": "upuUp",
+      "noreturn": false
+    },
+    {
+      "opcode": 22,
+      "name": "fd_renumber",
+      "arguments": "uu",
+      "noreturn": false
+    },
+    {
+      "opcode": 23,
+      "name": "fd_seek",
+      "arguments": "uIup",
+      "noreturn": false
+    },
+    {
+      "opcode": 24,
+      "name": "fd_sync",
+      "arguments": "u",
+      "noreturn": false
+    },
+    {
+      "opcode": 25,
+      "name": "fd_tell",
+      "arguments": "up",
+      "noreturn": false
+    },
+    {
+      "opcode": 26,
+      "name": "fd_write",
+      "arguments": "upup",
+      "noreturn": false
+    },
+    {
+      "opcode": 27,
+      "name": "path_create_directory",
+      "arguments": "upu",
+      "noreturn": false
+    },
+    {
+      "opcode": 28,
+      "name": "path_filestat_get",
+      "arguments": "uupup",
+      "noreturn": false
+    },
+    {
+      "opcode": 29,
+      "name": "path_filestat_set_times",
+      "arguments": "uupuUUu",
+      "noreturn": false
+    },
+    {
+      "opcode": 30,
+      "name": "path_link",
+      "arguments": "uupuupu",
+      "noreturn": false
+    },
+    {
+      "opcode": 31,
+      "name": "path_open",
+      "arguments": "uupuuUUup",
+      "noreturn": false
+    },
+    {
+      "opcode": 32,
+      "name": "path_readlink",
+      "arguments": "upupup",
+      "noreturn": false
+    },
+    {
+      "opcode": 33,
+      "name": "path_remove_directory",
+      "arguments": "upu",
+      "noreturn": false
+    },
+    {
+      "opcode": 34,
+      "name": "path_rename",
+      "arguments": "upuupu",
+      "noreturn": false
+    },
+    {
+      "opcode": 35,
+      "name": "path_symlink",
+      "arguments": "puupu",
+      "noreturn": false
+    },
+    {
+      "opcode": 36,
+      "name": "path_unlink_file",
+      "arguments": "upu",
+      "noreturn": false
+    },
+    {
+      "opcode": 37,
+      "name": "poll_oneoff",
+      "arguments": "ppup",
+      "noreturn": false
+    },
+    {
+      "opcode": 38,
+      "name": "proc_exit",
+      "arguments": "u",
+      "noreturn": true
+    },
+    {
+      "opcode": 39,
+      "name": "sched_yield",
+      "arguments": "",
+      "noreturn": false
+    },
+    {
+      "opcode": 40,
+      "name": "random_get",
+      "arguments": "pu",
+      "noreturn": false
+    },
+    {
+      "opcode": 41,
+      "name": "sock_accept",
+      "arguments": "uup",
+      "noreturn": false
+    },
+    {
+      "opcode": 42,
+      "name": "sock_recv",
+      "arguments": "upuupp",
+      "noreturn": false
+    },
+    {
+      "opcode": 43,
+      "name": "sock_send",
+      "arguments": "upuup",
+      "noreturn": false
+    },
+    {
+      "opcode": 44,
+      "name": "sock_shutdown",
+      "arguments": "uu",
+      "noreturn": false
+    }
+  ]
+}
