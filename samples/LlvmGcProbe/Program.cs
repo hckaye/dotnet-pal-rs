@@ -36,6 +36,17 @@ public static class Program
     }
     public static int Main(string[] args)
     {
+        try { return Run(args); }
+        catch (Exception error)
+        {
+            // Report only the managed message: the experimental runtime's fatal
+            // stack-trace formatter must not obscure a failed assertion.
+            Console.Error.WriteLine("MANAGED WASI FAIL: " + error.Message);
+            return 1;
+        }
+    }
+    private static int Run(string[] args)
+    {
         Check(args.Length == 1 && (args[0] == "baseline" || args[0] == "wrapped"), "expected probe mode");
         bool wrapped = args[0] == "wrapped";
         Check(!RuntimeFeature.IsDynamicCodeSupported, "AOT required");
@@ -43,6 +54,7 @@ public static class Program
         Check(Observe(out StorageStats storageBefore, out AdapterStats before, out ServicesStats servicesBefore) == 0, "observer failed");
         // The initial observer precedes the workload: startup evidence is not
         // manufactured by later allocation or finalization tests.
+        Console.WriteLine("WASM QUALIFICATION BEGIN mode=" + args[0]);
         WasmQualification.Run();
         long checksum = 0;
         int caught = 0, finals = 0;
