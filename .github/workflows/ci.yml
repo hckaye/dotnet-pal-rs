@@ -37,6 +37,8 @@ jobs:
         run: bash scripts/runtime.sh
       - name: Native signal and activation contracts
         run: bash scripts/context.sh
+      - name: Demand-allocated linear storage and eight-thread failure contracts
+        run: bash scripts/linear-heap.sh
       - name: Actual NativeAOT GC negative and positive controls
         run: bash scripts/nativeaot.sh
       - name: Freestanding ARM64 boundary compile
@@ -113,7 +115,7 @@ jobs:
           rustup override set 1.85.1
           for target in aarch64-unknown-none riscv64gc-unknown-none-elf thumbv7em-none-eabi; do
             rustup target add "$target"
-            for profile in host host-services host-kernel; do
+            for profile in host host-services host-kernel linear-heap; do
               cargo build --release --no-default-features --features "$profile" --target "$target"
             done
           done

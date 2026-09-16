@@ -24,6 +24,9 @@ let instance;
 const host = mode==='isolated' ? createWasiHost(wasi.wasiImport,()=>instance.exports.memory) : null;
 instance = await WebAssembly.instantiate(module, host ? host.imports : {wasi_snapshot_preview1:wasi.wasiImport});
 if (instance.exports.memory.buffer instanceof SharedArrayBuffer) throw new Error('this profile is single threaded');
+const initialBytes = instance.exports.memory.buffer.byteLength;
+if (process.env.PAL_REQUIRE_MEMORY_GROWTH === '1' && initialBytes >= 32*1024*1024)
+  throw new Error('demand-allocated profile unexpectedly preallocates its managed budget');
 let result;
 try { result = wasi.start(instance); } finally { await rm(workspace,{recursive:true,force:true}); }
 if (result !== 0) throw new Error('managed process failed ' + result);
@@ -34,10 +37,12 @@ let rejected = false;
 try { memory.grow(limits.maxPages - memory.buffer.byteLength / 65536 + 1); }
 catch (error) { if (!(error instanceof RangeError)) throw error; rejected = true; }
 if (!rejected) throw new Error('engine did not enforce audited memory maximum');
+if (process.env.PAL_REQUIRE_MEMORY_GROWTH === '1' && memory.buffer.byteLength <= initialBytes)
+  throw new Error('managed exhaustion workload did not grow shared linear memory');
 if (host) {
   for(const name of ['fd_write','path_open','path_rename','fd_readdir','random_get','clock_time_get','environ_get'])
     if (!(host.counts.get(name)>0)) throw new Error('missing actual BCL/GC host call: '+name);
   if (!(host.counts.get('fd_read')>0) && !(host.counts.get('fd_pread')>0)) throw new Error('missing BCL file reads');
   console.log('WASM OS ISOLATION PASS',JSON.stringify(Object.fromEntries(host.counts)));
 }
-console.log('WASM MODULE EXECUTION PASS mode=' + mode + ' memory_bytes=' + memory.buffer.byteLength);
+console.log('WASM MODULE EXECUTION PASS mode=' + mode + ' initial_bytes=' + initialBytes + ' memory_bytes=' + memory.buffer.byteLength);

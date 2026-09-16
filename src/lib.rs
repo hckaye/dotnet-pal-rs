@@ -28,7 +28,10 @@ mod backend;
 #[cfg(all(feature = "host", not(feature = "linux")))]
 #[path = "host.rs"]
 mod backend;
-#[cfg(feature = "linear")]
+#[cfg(all(feature = "linear", not(feature = "linear-heap")))]
+mod linear;
+#[cfg(feature = "linear-heap")]
+#[path = "linear_heap.rs"]
 mod linear;
 
 pub const ABI_VERSION: u32 = 2;
@@ -39,6 +42,7 @@ pub const OS_ERROR: u32 = 3;
 pub const OUT_OF_MEMORY: u32 = 4;
 pub const CAP_VM: u64 = 1;
 pub const CAP_LINEAR: u64 = 2;
+pub const CAP_DYNAMIC_LINEAR: u64 = 262144;
 
 // Integers, not Rust enums, cross the ABI. Unknown values can be rejected safely.
 pub type Reserve = unsafe extern "C" fn(usize, usize, u32, *mut *mut c_void) -> u32;
@@ -226,7 +230,7 @@ mod linear_api {
 const API_BASE: Api = Api {
     header: Header {
         abi_version: ABI_VERSION, struct_size: mem::size_of::<Api>() as u32,
-        capabilities: (if cfg!(feature = "linear") { CAP_LINEAR } else { CAP_VM }) | services::CAPABILITIES | kernel::CAPABILITIES | runtime::CAPABILITIES | wasi::CAPABILITIES | context::CAPABILITIES,
+        capabilities: (if cfg!(feature = "linear") { CAP_LINEAR } else { CAP_VM }) | services::CAPABILITIES | kernel::CAPABILITIES | runtime::CAPABILITIES | wasi::CAPABILITIES | context::CAPABILITIES | if cfg!(feature="linear-heap") { CAP_DYNAMIC_LINEAR } else { 0 },
     },
     #[cfg(not(feature = "linear"))]
     vm: vm::OPS,

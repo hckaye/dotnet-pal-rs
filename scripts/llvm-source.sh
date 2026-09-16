@@ -50,3 +50,5 @@ timeout 120s node integration/llvm-wasi/run.mjs artifacts/llvm/source/LlvmGcProb
 echo 'LLVM SOURCE RUNTIME PASS (compiled native runtime; no linker wrapping)'
 
 bash scripts/llvm-isolated.sh
+
+bash scripts/llvm-dynamic.sh

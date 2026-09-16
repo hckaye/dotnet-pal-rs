@@ -9,6 +9,7 @@ extern "C" {
 /* Capabilities are independent; no VM emulation is implied by linear storage. */
 #define DOTNET_PAL_CAP_VM UINT64_C(1)
 #define DOTNET_PAL_CAP_LINEAR UINT64_C(2)
+#define DOTNET_PAL_CAP_DYNAMIC_LINEAR UINT64_C(262144)
 #define DOTNET_PAL_CAP_CLOCK UINT64_C(4)
 #define DOTNET_PAL_CAP_SCHEDULER UINT64_C(8)
 #define DOTNET_PAL_OK 0u
@@ -248,6 +249,17 @@ typedef struct {
 /* Immutable process-lifetime table or NULL. Inspect version, size AND capabilities.
  * Missing groups contain NULL callbacks. ABI is per-target C, not a wire format. */
 const dotnet_pal_api *dotnet_pal_get_api(uint32_t version);
+
+/* linear-heap only: backend hooks, not additional runtime-facing entry points.
+ * Allocate uninitialized exclusive storage aligned to alignment; NULL on failure.
+ * Release is all-or-nothing and must preserve storage on failure. No reentry into
+ * PAL, unwinding, cancellation, or managed callbacks. They run under the ledger
+ * lock. Use the SAME allocator for both hooks. On WASI, share wasi-libc's allocator
+ * rather than calling memory.grow behind its program-break bookkeeping.
+ */
+uint32_t dotnet_pal_storage_allocate_v2(size_t size, size_t alignment, void **out);
+uint32_t dotnet_pal_storage_release_v2(void *address, size_t size);
+
 
 /* host: VM table. host-services: additionally requires the separate services
  * table. Both must be immutable, readable, and valid before runtime startup.

@@ -14,6 +14,8 @@ default = ["linux"]
 linux = ["dep:libc"]
 host = []
 linear = []
+# On-demand storage supplied by the embedder; shares the native C heap on WASI.
+linear-heap = ["linear"]
 # Explicit bounded managed-heap experiment; the default boundary arena stays 8 MiB.
 linear-gc = ["linear"]
 # Small real arena for managed OOM qualification; not GCHeapHardLimit (64-bit only).
