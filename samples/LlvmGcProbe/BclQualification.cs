@@ -36,7 +36,7 @@ internal static class BclQualification
             stream.Seek(-1, SeekOrigin.End); Check(stream.ReadByte() == 0x5a, "BCL seek/read");
             stream.SetLength(length);
         }
-        File.Move(original, moved);
+        File.Move(original, moved, overwrite: true);
         Check(!File.Exists(original) && File.Exists(moved), "BCL move/existence");
         Check(Directory.GetFiles(directory).Length == 1, "BCL directory enumeration");
         Check(File.ReadAllText(moved, Encoding.UTF8) == payload, "BCL rename changed data");

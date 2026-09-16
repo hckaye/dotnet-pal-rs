@@ -3,15 +3,22 @@ export const MEMORY_BYTES = 128 * 1024 * 1024;
 const imports = new Set(`args_get args_sizes_get clock_time_get environ_get environ_sizes_get
 fd_close fd_fdstat_get fd_prestat_get fd_prestat_dir_name fd_seek fd_write
 path_filestat_get path_unlink_file poll_oneoff proc_exit sched_yield random_get`.split(/\s+/));
-export function auditImports(entries) {
+// Exact expanded import set after adding real BCL file operations. The isolated
+// profile never uses this allowlist: it requires one dotnet_pal_host import only.
+const bclImports = new Set([...imports, ...`fd_advise fd_filestat_get fd_filestat_set_size
+fd_filestat_set_times fd_pread fd_pwrite fd_read fd_readdir fd_sync path_create_directory
+path_link path_open path_remove_directory path_rename`.split(/\s+/)]);
+export function auditImports(entries, profile='core') {
+  if (!['core','bcl'].includes(profile)) throw new Error('unknown import profile');
+  const allowed = profile==='bcl' ? bclImports : imports;
   const seen = new Set();
   for (const item of entries) {
     if (item.module !== 'wasi_snapshot_preview1' || item.kind !== 'function' ||
-        !imports.has(item.name) || seen.has(item.name))
+        !allowed.has(item.name) || seen.has(item.name))
       throw new Error('unapproved or duplicate import ' + item.module + '.' + item.name);
     seen.add(item.name);
   }
-  for (const name of imports) if (!seen.has(name)) throw new Error('missing audited import ' + name);
+  for (const name of allowed) if (!seen.has(name)) throw new Error('missing audited import ' + name);
 }
 export function memoryLimits(bytes) {
   const header = [0, 97, 115, 109, 1, 0, 0, 0];

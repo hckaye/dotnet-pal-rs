@@ -18,7 +18,7 @@ const limits = auditMemory(bytes);
 const module = await WebAssembly.compile(bytes);
 const imports = WebAssembly.Module.imports(module);
 console.log('IMPORTS', JSON.stringify(imports));
-if (mode==='isolated') assertIsolatedImports(module); else auditImports(imports);
+if (mode==='isolated') assertIsolatedImports(module); else auditImports(imports,'bcl');
 console.log('WASM MEMORY LIMIT PREFLIGHT PASS maximum_bytes=' + MEMORY_BYTES);
 let instance;
 const host = mode==='isolated' ? createWasiHost(wasi.wasiImport,()=>instance.exports.memory) : null;
@@ -35,8 +35,9 @@ try { memory.grow(limits.maxPages - memory.buffer.byteLength / 65536 + 1); }
 catch (error) { if (!(error instanceof RangeError)) throw error; rejected = true; }
 if (!rejected) throw new Error('engine did not enforce audited memory maximum');
 if (host) {
-  for(const name of ['fd_write','fd_read','path_open','path_rename','fd_readdir','random_get','clock_time_get','environ_get'])
+  for(const name of ['fd_write','path_open','path_rename','fd_readdir','random_get','clock_time_get','environ_get'])
     if (!(host.counts.get(name)>0)) throw new Error('missing actual BCL/GC host call: '+name);
+  if (!(host.counts.get('fd_read')>0) && !(host.counts.get('fd_pread')>0)) throw new Error('missing BCL file reads');
   console.log('WASM OS ISOLATION PASS',JSON.stringify(Object.fromEntries(host.counts)));
 }
 console.log('WASM MODULE EXECUTION PASS mode=' + mode + ' memory_bytes=' + memory.buffer.byteLength);
