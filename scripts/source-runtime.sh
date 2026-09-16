@@ -26,7 +26,7 @@ for collector in WorkstationGC ServerGC; do
   [[ ${#archives[@]} == 1 ]] || { echo "Expected exactly one rebuilt $collector archive" >&2; exit 1; }
   nm -u "${archives[0]}" > "artifacts/source-$collector-undefined.txt"
   grep -q 'dotnet_pal_get_api' "artifacts/source-$collector-undefined.txt"
-  if grep -Eq ' U pthread_rwlock_(rdlock|wrlock|unlock)$' "artifacts/source-$collector-undefined.txt"; then
+  if grep -Eq ' U (pthread_rwlock_(rdlock|wrlock|unlock)|dl_iterate_phdr|dlsym)$' "artifacts/source-$collector-undefined.txt"; then
     echo 'unwinder lock bypassed the neutral mutex capability' >&2; exit 1
   fi
   rm "$overlay/libRuntime.$collector.a"
@@ -44,12 +44,13 @@ Path("artifacts/source-manifest.json").write_text(json.dumps(manifest, indent=2)
 PYMANIFEST
 clang++ -std=c++17 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
   -DDOTNET_PAL_OBSERVER_ONLY -Iinclude -Inative -c integration/dotnet10/gc_wrap.cpp -o artifacts/gc_observer.o
-cargo build --release --no-default-features --features host-context --target-dir target/host-kernel
+cargo build --release --no-default-features --features host-elf --target-dir target/host-kernel
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/services_host.c -o artifacts/services_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/kernel_host.c -o artifacts/kernel_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/runtime_host.c -o artifacts/runtime_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/context_host.c -o artifacts/context_host.o
-clang -r artifacts/host_backend.o artifacts/services_host.o artifacts/kernel_host.o artifacts/runtime_host.o artifacts/context_host.o -o artifacts/host_services_backend.o
+clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/elf_host.c -o artifacts/elf_host.o
+clang -r artifacts/elf_host.o artifacts/host_backend.o artifacts/services_host.o artifacts/kernel_host.o artifacts/runtime_host.o artifacts/context_host.o -o artifacts/host_services_backend.o
 bash scripts/qualify.sh "$overlay" "$root/artifacts/source-manifest.json"
 for profile in workstation server; do
   collector=WorkstationGC

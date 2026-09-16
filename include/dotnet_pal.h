@@ -211,6 +211,42 @@ typedef struct {
     int32_t (*signal_number)(uint32_t);
 } dotnet_pal_context_ops;
 typedef struct {dotnet_pal_header header;dotnet_pal_context_ops ops;} dotnet_pal_host_context;
+
+/* ELF64 metadata, not an OS-native dl_phdr_info structure. Header payload is
+ * standard ELF64 program-header data in the target byte order. It is borrowed
+ * for the enumeration callback only. Callbacks must not unload modules, throw,
+ * enter managed code, or retain the descriptor; normal loader synchronization
+ * remains backend-owned. This service is NOT async-signal-safe.
+ */
+#define DOTNET_PAL_CAP_ELF64_METADATA UINT64_C(524288)
+#define DOTNET_PAL_ELF_LOAD_COUNTERS 1u
+typedef struct {
+    uint32_t type, flags;
+    uint64_t offset, virtual_address, physical_address, file_size, memory_size, alignment;
+} dotnet_pal_elf64_header;
+typedef struct {
+    uintptr_t load_bias;
+    const char *name;
+    const dotnet_pal_elf64_header *headers;
+    uint32_t header_count, flags;
+    uint64_t loads, unloads;
+} dotnet_pal_elf_image;
+typedef struct {
+    void *module_base;
+    const char *module_name;
+    void *symbol_address;
+    const char *symbol_name;
+} dotnet_pal_elf_symbol;
+typedef int32_t (*dotnet_pal_elf_visitor)(const dotnet_pal_elf_image*, void*);
+typedef struct { uint64_t enumerate_ok, lookup_ok, rejected_or_failed; } dotnet_pal_elf_stats;
+typedef struct {
+    uint32_t (*enumerate)(dotnet_pal_elf_visitor, void*, int32_t *stop_result);
+    uint32_t (*lookup)(const void*, dotnet_pal_elf_symbol*);
+    uint32_t (*read_stats)(dotnet_pal_elf_stats*, size_t);
+} dotnet_pal_elf_ops;
+typedef struct { dotnet_pal_header header; dotnet_pal_elf_ops ops; } dotnet_pal_host_elf;
+const dotnet_pal_host_elf *dotnet_pal_host_elf_v2(void);
+
 typedef struct {
     dotnet_pal_header header;
     dotnet_pal_vm_ops vm;
@@ -222,10 +258,12 @@ typedef struct {
     dotnet_pal_runtime_ops runtime;
     dotnet_pal_wasi_ops wasi;
     dotnet_pal_context_ops context;
+    dotnet_pal_elf_ops elf;
 } dotnet_pal_api;
 
 /* Use size checks BEFORE reading a capability group from a foreign table.
  * Each size marks the END of that group, not sizeof a future extended API. */
+#define DOTNET_PAL_ELF_API_SIZE (offsetof(dotnet_pal_api, elf) + sizeof(dotnet_pal_elf_ops))
 #define DOTNET_PAL_CONTEXT_API_SIZE (offsetof(dotnet_pal_api, context) + sizeof(dotnet_pal_context_ops))
 #define DOTNET_PAL_WASI_API_SIZE (offsetof(dotnet_pal_api, wasi) + sizeof(dotnet_pal_wasi_ops))
 #define DOTNET_PAL_RUNTIME_API_SIZE (offsetof(dotnet_pal_api, runtime) + sizeof(dotnet_pal_runtime_ops))

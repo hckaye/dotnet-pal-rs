@@ -49,6 +49,12 @@ internal static class Program
     private static extern uint ReadContextStats(out ContextStats stats,nuint size);
     [DllImport("__Internal",EntryPoint="dotnet_pal_probe_runtime_stats")]
     private static extern uint ReadRuntimeStats(out RuntimeStats stats,nuint size);
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ElfStats { public ulong Enumerate, Lookup, Failed; }
+    [DllImport("__Internal",EntryPoint="dotnet_pal_probe_elf_stats")]
+    private static extern uint ReadElfStats(out ElfStats stats,nuint size);
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void MetadataThrow() { throw new InvalidOperationException("metadata boundary probe"); }
     private static int stopBusy;
     private static long busyChecksum;
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -65,6 +71,10 @@ internal static class Program
     private static void ActivationAndRuntimeProbe(bool routed)
     {
         Require(ReadContextStats(out ContextStats before,48)==0,"context observer unavailable");
+        try { MetadataThrow(); }
+        catch(InvalidOperationException error) {
+            Require(error.StackTrace?.Contains(nameof(MetadataThrow))==true,"managed exception stack trace was lost");
+        }
         using var ready=new ManualResetEventSlim(false);
         stopBusy=0;
         var worker=new Thread(()=>BusyManagedLoop(ready));worker.Start();
@@ -81,6 +91,9 @@ internal static class Program
         }
         Require(ReadContextStats(out ContextStats after,48)==0,"context observer unavailable");
         Require(ReadRuntimeStats(out RuntimeStats runtime,96)==0,"runtime observer unavailable");
+        Require(ReadElfStats(out ElfStats elf,24)==0,"ELF observer unavailable");
+        Require(routed ? elf.Enumerate>0 : elf.Enumerate==0 && elf.Lookup==0,"ELF metadata discovery did not follow its expected path");
+        Console.WriteLine($"ELF RUNTIME PROBE PASS routed={routed} enumerate={elf.Enumerate} lookup={elf.Lookup}");
         if(routed)
         {
             Require(after.Installs>=2 && after.Requests>before.Requests && after.Unblocks>0 && after.Threads>0,

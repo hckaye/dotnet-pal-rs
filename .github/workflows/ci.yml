@@ -39,6 +39,8 @@ jobs:
         run: bash scripts/context.sh
       - name: Demand-allocated linear storage and eight-thread failure contracts
         run: bash scripts/linear-heap.sh
+      - name: ELF discovery and malformed-provider contracts
+        run: bash scripts/elf.sh
       - name: Actual NativeAOT GC negative and positive controls
         run: bash scripts/nativeaot.sh
       - name: Freestanding ARM64 boundary compile
@@ -66,6 +68,7 @@ jobs:
             /src/coreclr/nativeaot/Runtime/Crst.h
             /src/coreclr/nativeaot/Runtime/Crst.cpp
             /src/native/external/llvm-libunwind/src/RWMutex.hpp
+            /src/native/external/llvm-libunwind/src/AddressSpace.hpp
       - name: Validate source-patch applicability, not a runtime source build
         if: ${{ !cancelled() && steps.boundary.outcome == 'success' }}
         run: |
@@ -116,7 +119,7 @@ jobs:
           rustup override set 1.85.1
           for target in aarch64-unknown-none riscv64gc-unknown-none-elf thumbv7em-none-eabi; do
             rustup target add "$target"
-            for profile in host host-services host-kernel linear-heap; do
+            for profile in host host-services host-kernel host-elf linear-heap; do
               cargo build --release --no-default-features --features "$profile" --target "$target"
             done
           done

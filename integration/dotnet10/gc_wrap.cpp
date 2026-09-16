@@ -58,3 +58,9 @@ extern "C" uint32_t dotnet_pal_probe_runtime_stats(dotnet_pal_runtime_stats *out
     if(!p || p->header.struct_size<DOTNET_PAL_RUNTIME_API_SIZE || !p->runtime.read_stats)return DOTNET_PAL_UNSUPPORTED;
     return p->runtime.read_stats(out,size);
 }
+
+extern "C" uint32_t dotnet_pal_probe_elf_stats(dotnet_pal_elf_stats *out,size_t size) {
+    const auto *p=dotnet_pal_get_api(DOTNET_PAL_ABI_VERSION);
+    if(!p || p->header.struct_size<DOTNET_PAL_ELF_API_SIZE || !p->elf.read_stats)return DOTNET_PAL_UNSUPPORTED;
+    return p->elf.read_stats(out,size);
+}
