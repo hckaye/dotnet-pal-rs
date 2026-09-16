@@ -63,8 +63,8 @@ int main(void) {
     for (size_t i = 0; i < page; ++i) assert(((unsigned char *)p)[i] == 0);
     assert(api->vm.reset((char *)p + page, page) == DOTNET_PAL_OK);
     ((volatile unsigned char *)p)[page] = 0x42; // reset does not remove accessibility
+    pal_test_release_must_fault(p, 2 * page - 1, api->vm.release);
     assert(api->vm.release(p, 2 * page - 1) == DOTNET_PAL_OK);
-    pal_test_must_fault(p, 0);
 
     pthread_t threads[4];
     for (int i = 0; i < 4; ++i) assert(pthread_create(&threads[i], NULL, worker, NULL) == 0);
