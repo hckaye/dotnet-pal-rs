@@ -3,7 +3,7 @@
 #include "dotnet_pal.h"
 
 // Version-specific adaptation belongs here, NOT in the Rust/SDK boundary.
-// Signatures audited against dotnet/runtime v10.0.0 (60629d14374c...).
+// Signatures audited against dotnet/runtime v10.0.12 (4271d88e0aeb...).
 namespace dotnet_pal_gc {
 inline const dotnet_pal_api *api() {
     const auto *p = dotnet_pal_get_api(DOTNET_PAL_ABI_VERSION);

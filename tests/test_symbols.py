@@ -14,7 +14,7 @@ spec.loader.exec_module(symbols)
 class ArchiveTests(unittest.TestCase):
     def test_exact_sdk_link_input(self):
         with tempfile.TemporaryDirectory() as directory:
-            archive = Path(directory) / "sdk-pack" / "10.0.0" / "native/libRuntime.WorkstationGC.a"
+            archive = Path(directory) / "sdk-pack" / "10.0.12" / "native/libRuntime.WorkstationGC.a"
             archive.parent.mkdir(parents=True)
             archive.touch()
             with patch.object(symbols, "defined", return_value=set(symbols.SYMBOLS)):
@@ -27,7 +27,7 @@ class ArchiveTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             symbols.audit_runtime(Path("10.0.1/libRuntime.WorkstationGC.a"))
         with self.assertRaises(SystemExit):
-            symbols.audit_runtime(Path("missing/10.0.0/libRuntime.WorkstationGC.a"))
+            symbols.audit_runtime(Path("missing/10.0.12/libRuntime.WorkstationGC.a"))
 
 class SourceManifestTests(unittest.TestCase):
     def test_source_archive_must_match_manifest(self):

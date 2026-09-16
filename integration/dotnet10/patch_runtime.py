@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kernel_patch
 import runtime_patch
 
-REVISION = "60629d14374c56f1cb51819049ad1fa529307f8d"
+REVISION = "4271d88e0aebf3d04f188f1334c2220d80555ef6"
 GC_FILE = "src/coreclr/gc/unix/gcenv.unix.cpp"
 CMAKE_FILE = "src/coreclr/nativeaot/Runtime/CMakeLists.txt"
 MARKER = "DOTNET_PAL_GC_VM"
@@ -57,7 +57,7 @@ def patch_gc(text):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("runtime", type=Path, help="clean checkout of dotnet/runtime v10.0.0")
+    parser.add_argument("runtime", type=Path, help="clean checkout of dotnet/runtime v10.0.12")
     parser.add_argument("--check", action="store_true", help="validate without writing files")
     args = parser.parse_args()
     root = args.runtime.resolve()

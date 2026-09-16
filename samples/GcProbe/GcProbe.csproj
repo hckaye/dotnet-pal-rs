@@ -2,7 +2,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
-    <RuntimeFrameworkVersion>10.0.0</RuntimeFrameworkVersion>
+    <RuntimeFrameworkVersion>10.0.12</RuntimeFrameworkVersion>
     <PublishAot>true</PublishAot>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -26,7 +26,7 @@
   </ItemGroup>
   <Import Project="../../artifacts/wrap.props" Condition="'$(PalWrap)' == 'true'" />
   <Target Name="PalAuditRuntime" BeforeTargets="LinkNative" DependsOnTargets="SetupOSSpecificProps">
-    <Error Condition="'$(RuntimeFrameworkVersion)' != '10.0.0'" Text="This probe requires runtime 10.0.0" />
+    <Error Condition="'$(RuntimeFrameworkVersion)' != '10.0.12'" Text="This probe requires runtime 10.0.12" />
     <WriteLinesToFile File="$(PalRoot)/artifacts/runtime-archive.txt" Lines="$(IlcSdkPath)$(FullRuntimeName).a" Overwrite="true" />
     <PropertyGroup>
       <PalSourceAuditArg Condition="'$(PalSourceManifest)' != ''">--source-manifest &quot;$(PalSourceManifest)&quot;</PalSourceAuditArg>

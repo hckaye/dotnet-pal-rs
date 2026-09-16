@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: dotnet/runtime
-          ref: 60629d14374c56f1cb51819049ad1fa529307f8d
+          ref: 4271d88e0aebf3d04f188f1334c2220d80555ef6
           path: artifacts/upstream
           persist-credentials: false
       - name: Package public, pinned build inputs only

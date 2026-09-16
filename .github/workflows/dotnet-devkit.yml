@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: dotnet/runtime
-          ref: 60629d14374c56f1cb51819049ad1fa529307f8d
+          ref: 4271d88e0aebf3d04f188f1334c2220d80555ef6
           path: artifacts/upstream
           persist-credentials: false
       - name: Download and restore public pinned tools, without credential files
@@ -26,7 +26,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts/devkit "$RUNNER_TEMP/dotnet"
-          curl --fail --location --retry 3 --max-time 300 https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.100/dotnet-sdk-10.0.100-linux-x64.tar.gz -o artifacts/devkit/dotnet-sdk.tar.gz
+          curl --fail --location --retry 3 --max-time 300 https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.401/dotnet-sdk-10.0.401-linux-x64.tar.gz -o artifacts/devkit/dotnet-sdk.tar.gz
           tar -xzf artifacts/devkit/dotnet-sdk.tar.gz -C "$RUNNER_TEMP/dotnet"
           "$RUNNER_TEMP/dotnet/dotnet" restore samples/GcProbe/GcProbe.csproj -r linux-x64 -p:PalWrap=false
           tar -czf artifacts/devkit/packages.tar.gz -C "$NUGET_PACKAGES" .

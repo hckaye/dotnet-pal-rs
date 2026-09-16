@@ -15,7 +15,7 @@ SYMBOLS = (
     "_ZN15GCToOSInterface12VirtualResetEPvmb",
     "_ZN15GCToOSInterface33VirtualReserveAndCommitLargePagesEmt",
 )
-RUNTIME_REVISION = "60629d14374c56f1cb51819049ad1fa529307f8d"
+RUNTIME_REVISION = "4271d88e0aebf3d04f188f1334c2220d80555ef6"
 
 
 def defined(path):
@@ -31,7 +31,7 @@ def audit_runtime(path, source_manifest=None):
     if not path.is_file():
         raise SystemExit(f"Selected NativeAOT runtime archive is missing: {path}")
     if source_manifest is None:
-        if "10.0.0" not in path.parts:
+        if "10.0.12" not in path.parts:
             raise SystemExit(f"Unpinned published archive: {path}")
     else:
         try:

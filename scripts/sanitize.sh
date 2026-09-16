@@ -12,7 +12,7 @@ export ASAN_OPTIONS=detect_leaks=1:detect_stack_use_after_return=1:halt_on_error
 # Use Clang's sanitizer runtime for the mixed-language final link.
 export RUSTFLAGS='-Zsanitizer=address -Zexternal-clangrt -Cdebuginfo=1 -Cforce-frame-pointers=yes'
 common=(-O1 -g -fno-omit-frame-pointer -fsanitize=address -Wall -Wextra -Werror -Iinclude -Inative)
-for backend in linux host-kernel linear; do
+for backend in linux host-runtime linear; do
   cargo "+$rust" build -Zbuild-std=core,compiler_builtins --release --no-default-features \
     --features "$backend" --target "$triple" --target-dir "target/asan-$backend"
   lib="target/asan-$backend/$triple/release/libdotnet_pal_rs.a"
@@ -25,10 +25,10 @@ for backend in linux host-kernel linear; do
     timeout 120s "$out/gc-linear"
   else
     providers=()
-    if [[ "$backend" == host-kernel ]]; then
-      providers=(tests/host_backend.c tests/services_host.c tests/kernel_host.c)
+    if [[ "$backend" == host-runtime ]]; then
+      providers=(tests/host_backend.c tests/services_host.c tests/kernel_host.c tests/runtime_host.c)
     fi
-    for suite in abi services kernel; do
+    for suite in abi services kernel runtime; do
       clang -std=c11 "${common[@]}" "tests/$suite.c" "${providers[@]}" "$lib" \
         -Wl,--gc-sections -lpthread -ldl -lm -o "$out/$backend-$suite"
       timeout 120s "$out/$backend-$suite"

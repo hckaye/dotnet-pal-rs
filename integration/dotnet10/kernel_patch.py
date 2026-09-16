@@ -34,8 +34,13 @@ def function(text, name, body):
 
 def gc_extra(text):
     start = text.index("bool CanFlushUsingMembarrier()")
-    end = text.index("size_t GetRestrictedPhysicalMemoryLimit();", start)
-    text = text[:start] + f"#ifndef {MARKER}\n" + text[start:end] + "#endif\n\n" + text[end:]
+    # Only the membarrier helper and its state are removed. Serviced runtimes
+    # declare g_configuredCpuCount immediately afterwards; it must remain live.
+    state = "static pthread_mutex_t g_flushProcessWriteBuffersMutex;"
+    if text.count(state) != 1: raise ValueError("missing or duplicate flush state")
+    end = text.index(state, start) + len(state)
+
+    text = text[:start] + f"#ifndef {MARKER}\n" + text[start:end] + "\n#endif\n\n" + text[end:]
     anchor = "#ifndef TARGET_WASM\n    assert(s_flushUsingMemBarrier == 0);"
     text = once(text, anchor, f"#if !defined(TARGET_WASM) && !defined({MARKER})\n    assert(s_flushUsingMemBarrier == 0);")
     old = "    int pageSize = sysconf( _SC_PAGE_SIZE );"

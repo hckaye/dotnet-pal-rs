@@ -7,7 +7,7 @@ case "$(uname -m)" in
   *) echo "Only Linux x64/ARM64 are configured" >&2; exit 1 ;;
 esac
 [[ "$(uname -s)" == Linux ]]
-[[ "$(dotnet --version)" == 10.0.100 ]] || { echo "Use the pinned SDK 10.0.100" >&2; exit 1; }
+[[ "$(dotnet --version)" == 10.0.401 ]] || { echo "Use the pinned SDK 10.0.401" >&2; exit 1; }
 mkdir -p artifacts
 clang++ -std=c++17 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
   -Iinclude -Inative -c integration/dotnet10/gc_wrap.cpp -o artifacts/gc_wrap.o
