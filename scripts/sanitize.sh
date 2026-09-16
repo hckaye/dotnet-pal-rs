@@ -34,7 +34,7 @@ for backend in linux host-runtime linear linear-heap; do
       providers=(tests/host_backend.c tests/services_host.c tests/kernel_host.c tests/runtime_host.c)
     fi
     if [[ "$backend" == linux ]]; then
-      clang++ -std=c++17 "${common[@]}" tests/unwind_lock.cpp "$lib" -Wl,--gc-sections -lpthread -ldl -lm -o "$out/unwind-lock"
+      clang++ -std=c++17 -fno-exceptions -fno-rtti "${common[@]}" tests/unwind_lock.cpp "$lib" -Wl,--gc-sections -lpthread -ldl -lm -o "$out/unwind-lock"
       timeout 120s "$out/unwind-lock"
     fi
     for suite in abi services kernel runtime; do

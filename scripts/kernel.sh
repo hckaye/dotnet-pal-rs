@@ -18,6 +18,6 @@ for mode in {1..8}; do timeout 10s artifacts/kernel_faults-host "$mode"; done
 c++ -std=c++17 -O2 -Wall -Wextra -Werror -Iinclude -Inative tests/kernel_adapter.cpp -o artifacts/kernel-adapter
 timeout 10s artifacts/kernel-adapter
 
-c++ -std=c++17 -O2 -Wall -Wextra -Werror -Iinclude -Inative tests/unwind_lock.cpp \
+clang++ -std=c++17 -O2 -fno-exceptions -fno-rtti -fuse-ld=lld -Wall -Wextra -Werror -Iinclude -Inative tests/unwind_lock.cpp \
   target/release/libdotnet_pal_rs.a -Wl,--gc-sections -lpthread -ldl -lm -o artifacts/unwind-lock
 timeout 60s artifacts/unwind-lock
