@@ -16,6 +16,8 @@ host = []
 linear = []
 # Explicit bounded managed-heap experiment; the default boundary arena stays 8 MiB.
 linear-gc = ["linear"]
+# Small real arena for managed OOM qualification; not GCHeapHardLimit (64-bit only).
+linear-gc-small = ["linear-gc"]
 host-services = ["host"]
 host-kernel = ["host-services"]
 wasi-clock = ["linear"]

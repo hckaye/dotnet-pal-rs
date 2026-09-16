@@ -7,8 +7,10 @@ use core::{cell::UnsafeCell, ffi::c_void, hint, sync::atomic::{AtomicBool, Order
 pub const GRANULARITY: usize = 4096;
 #[cfg(not(feature = "linear-gc"))]
 pub const CAPACITY: usize = 8 * 1024 * 1024;
-#[cfg(feature = "linear-gc")]
+#[cfg(all(feature = "linear-gc", not(feature = "linear-gc-small")))]
 pub const CAPACITY: usize = 256 * 1024 * 1024;
+#[cfg(feature = "linear-gc-small")]
+pub const CAPACITY: usize = 64 * 1024 * 1024;
 const BLOCKS: usize = CAPACITY / GRANULARITY;
 const TAIL: usize = usize::MAX;
 #[repr(C, align(65536))]

@@ -32,6 +32,7 @@ jobs:
           rustup target add wasm32-wasip1
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build clang llvm lld python3
+          node --test tests/wasm_contract.test.mjs
           bash scripts/gc-linear.sh
       - name: Verify WASI SDK and execute managed negative and positive controls
         shell: bash

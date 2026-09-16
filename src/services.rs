@@ -1,5 +1,7 @@
 //! Clock/scheduling capability. No std, allocation, managed callbacks or unwinding.
-use crate::{aligned_output, Counter, INVALID_ARGUMENT, OK, OS_ERROR};
+use crate::{aligned_output, Counter, INVALID_ARGUMENT, OK};
+#[cfg(any(feature = "linux", feature = "host-services", feature = "wasi-clock"))]
+use crate::OS_ERROR;
 use core::mem;
 
 pub const CAP_CLOCK: u64 = 4;

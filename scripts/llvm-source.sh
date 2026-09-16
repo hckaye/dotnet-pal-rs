@@ -44,6 +44,6 @@ MSBuildEnableWorkloadResolver=false dotnet publish samples/LlvmGcProbe/LlvmGcPro
 if grep -q '__wrap__ZN15GCToOSInterface' artifacts/llvm/source-symbols.txt; then
   echo 'unexpected --wrap helpers in source configuration' >&2; exit 1
 fi
-timeout 120s node integration/llvm-wasi/run.mjs artifacts/llvm/source/LlvmGcProbe.wasm wrapped \
+timeout 120s node integration/llvm-wasi/run.mjs artifacts/llvm/source/LlvmGcProbe.wasm source 2>&1 \
   | tee artifacts/llvm/source-run.log
 echo 'LLVM SOURCE RUNTIME PASS (compiled native runtime; no linker wrapping)'

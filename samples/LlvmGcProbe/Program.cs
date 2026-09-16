@@ -47,8 +47,8 @@ public static class Program
     }
     private static int Run(string[] args)
     {
-        Check(args.Length == 1 && (args[0] == "baseline" || args[0] == "wrapped"), "expected probe mode");
-        bool wrapped = args[0] == "wrapped";
+        Check(args.Length == 1 && (args[0] == "baseline" || args[0] == "wrapped" || args[0] == "source"), "expected probe mode");
+        bool wrapped = args[0] != "baseline";
         Check(!RuntimeFeature.IsDynamicCodeSupported, "AOT required");
         Check(CheckErrorText() == 1, "error conversion failed");
         Check(Observe(out StorageStats storageBefore, out AdapterStats before, out ServicesStats servicesBefore) == 0, "observer failed");
@@ -56,6 +56,13 @@ public static class Program
         // manufactured by later allocation or finalization tests.
         Console.WriteLine("WASM QUALIFICATION BEGIN mode=" + args[0]);
         WasmQualification.Run();
+        Check(Observe(out StorageStats exhaustedStorage, out AdapterStats exhausted, out ServicesStats exhaustedServices) == 0, "post-OOM observer failed");
+        if (wrapped)
+        {
+            Check(exhaustedStorage.Failed > storageBefore.Failed, "OOM never reached the real Rust arena");
+            Check(exhausted.Failed - before.Failed == exhaustedStorage.Failed - storageBefore.Failed,
+                "non-allocation adapter failures during OOM qualification");
+        }
         long checksum = 0;
         int caught = 0, finals = 0;
         for (int wave = 0; wave < 8; ++wave)
@@ -73,7 +80,7 @@ public static class Program
             Check(before.Reserve > 0 && storageBefore.Allocate > 0, "GC startup did not use Rust linear storage");
             Check(after.Commit > before.Commit, "managed allocations did not cross the linear adapter");
             Check(servicesAfter.Clock > servicesBefore.Clock, "GC clock did not cross Rust");
-            Check(storageAfter.Failed == 0 && after.Failed == 0 && servicesAfter.Failed == 0, "unexpected boundary failure");
+            Check(storageAfter.Failed == exhaustedStorage.Failed && after.Failed == exhausted.Failed && servicesAfter.Failed == 0, "unexpected boundary failure");
         }
         else
         {

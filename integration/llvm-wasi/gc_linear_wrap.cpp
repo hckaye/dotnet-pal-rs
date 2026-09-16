@@ -47,3 +47,8 @@ extern "C" uint32_t dotnet_pal_linear_probe_stats(dotnet_pal_linear_stats *stora
         return DOTNET_PAL_UNSUPPORTED;
     return p->services.read_stats(services, sizeof(*services));
 }
+
+// Read-only geometry observer; never allocates or increments operation counters.
+extern "C" uint64_t dotnet_pal_linear_probe_capacity() {
+    return dotnet_pal_gc_linear::require()->linear.capacity();
+}

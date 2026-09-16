@@ -7,6 +7,8 @@ using System.Runtime.InteropServices;
 // profile. Finalization is explicitly pumped; no background thread is implied.
 internal static class WasmQualification
 {
+    [DllImport("__Internal", EntryPoint="dotnet_pal_linear_probe_capacity")]
+    private static extern ulong ArenaCapacity();
     private static int finalized;
     private sealed class Canary
     {
@@ -65,9 +67,12 @@ internal static class WasmQualification
     internal static void Run()
     {
         Check(!GCSettings.IsServerGC, "Wasm profile must be single-threaded Workstation GC");
-        long cap = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
-        Check(cap == 64L * 1024 * 1024, "effective Wasm heap limit is not 64 MiB: " + cap);
-        Console.WriteLine("WASM HEAP LIMIT PREFLIGHT PASS bytes=" + cap);
+        // GCHeapHardLimit is a 64-bit-only setting. Do not pretend that the
+        // wasm32 GC memory-information value enforces a managed heap limit.
+        // The runner separately audits and enforces the 128 MiB module maximum.
+        ulong cap = ArenaCapacity();
+        Check(cap == 64UL * 1024 * 1024, "actual Rust arena capacity is not 64 MiB");
+        Console.WriteLine("WASM ARENA PREFLIGHT PASS bytes=" + cap);
         byte[] root = new byte[65536]; root[0] = 43; root[65535] = 72;
         GCHandle pinned = GCHandle.Alloc(root, GCHandleType.Pinned);
         IntPtr initial = pinned.AddrOfPinnedObject();

@@ -9,7 +9,7 @@ exec > >(tee artifacts/llvm/driver.log) 2>&1
 : "${NUGET_PACKAGES:?provide an isolated package cache}"
 export MSBuildEnableWorkloadResolver=false
 project=samples/LlvmGcProbe/LlvmGcProbe.csproj
-cargo build --release --no-default-features --features linear-gc,wasi-clock --target wasm32-wasip1
+cargo build --release --no-default-features --features linear-gc-small,wasi-clock --target wasm32-wasip1
 cc="$WASI_SDK_PATH/bin/clang"; cxx="$WASI_SDK_PATH/bin/clang++"
 # This PURE formatter must use the P2 SDK's error constants, matching the published
 # System.Native archive. It performs no OS calls or P2 imports. The P1 SDK has no
@@ -32,6 +32,6 @@ for mode in baseline wrapped; do
   dotnet publish "$project" -r wasi-wasm -c Release -p:IlcLlvmTarget=wasm32-unknown-wasip1 \
     "-p:PalWrap=$wrapping" "-p:PalObserverObject=$root/artifacts/llvm/$mode.o" \
     -o "artifacts/llvm/$mode" 2>&1 | tee "artifacts/llvm/$mode-build.log"
-  timeout 120s node integration/llvm-wasi/run.mjs "artifacts/llvm/$mode/LlvmGcProbe.wasm" "$mode" \
+  timeout 120s node integration/llvm-wasi/run.mjs "artifacts/llvm/$mode/LlvmGcProbe.wasm" "$mode" 2>&1 \
     | tee "artifacts/llvm/$mode-run.log"
 done
