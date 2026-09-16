@@ -37,6 +37,7 @@ PY
 rm -rf samples/LlvmGcProbe/obj/Release samples/LlvmGcProbe/bin/Release
 MSBuildEnableWorkloadResolver=false dotnet publish samples/LlvmGcProbe/LlvmGcProbe.csproj \
   -r wasi-wasm -c Release -p:IlcLlvmTarget=wasm32-unknown-wasip1 -p:PalWrap=false \
+  "-p:IlcFrameworkPath=$root/artifacts/llvm/bcl/" \
   "-p:IlcSdkPath=$overlay/" "-p:PalSourceManifest=$root/artifacts/llvm/source-manifest.json" \
   "-p:PalObserverObject=$root/artifacts/llvm/baseline.o" -o artifacts/llvm/source \
   2>&1 | tee artifacts/llvm/source-publish.log

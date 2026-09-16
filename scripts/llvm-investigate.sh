@@ -25,11 +25,13 @@ done
 python3 integration/llvm-wasi/symbols.py --wrapper artifacts/llvm/wrapped.o --props artifacts/llvm/wrap.props --nm "$WASI_SDK_PATH/bin/llvm-nm"
 dotnet restore "$project" -r wasi-wasm
 python3 integration/llvm-wasi/check_packages.py
+python3 integration/llvm-wasi/prepare_bcl.py
 for mode in baseline wrapped; do
   wrapping=false
   [[ "$mode" != wrapped ]] || wrapping=true
   rm -rf samples/LlvmGcProbe/obj/Release samples/LlvmGcProbe/bin/Release
   dotnet publish "$project" -r wasi-wasm -c Release -p:IlcLlvmTarget=wasm32-unknown-wasip1 \
+    "-p:IlcFrameworkPath=$root/artifacts/llvm/bcl/" "-p:IlcSdkPath=$root/artifacts/llvm/published-sdk/" \
     "-p:PalWrap=$wrapping" "-p:PalObserverObject=$root/artifacts/llvm/$mode.o" \
     -o "artifacts/llvm/$mode" 2>&1 | tee "artifacts/llvm/$mode-build.log"
   timeout 120s node integration/llvm-wasi/run.mjs "artifacts/llvm/$mode/LlvmGcProbe.wasm" "$mode" 2>&1 \

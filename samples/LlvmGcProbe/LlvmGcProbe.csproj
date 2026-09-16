@@ -24,6 +24,7 @@
   </ItemGroup>
   <Import Project="../../artifacts/llvm/wrap.props" Condition="'$(PalWrap)' == 'true'" />
   <Target Name="RecordCompilerRuntime" BeforeTargets="LinkNativeLlvm" DependsOnTargets="SetupOSSpecificProps">
+    <Exec Command="python3 &quot;$(PalRoot)/integration/llvm-wasi/prepare_bcl.py&quot; --check --framework &quot;$(IlcFrameworkPath)&quot; --sdk &quot;$(IlcSdkPath)&quot;" />
     <WriteLinesToFile File="$(PalRoot)/artifacts/llvm/runtime-archive.txt" Lines="$(IlcSdkPath)libPortableRuntime.a" Overwrite="true" />
     <PropertyGroup>
       <PalSourceArg Condition="'$(PalSourceManifest)' != ''">--source-manifest &quot;$(PalSourceManifest)&quot;</PalSourceArg>
