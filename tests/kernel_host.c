@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
@@ -69,18 +70,49 @@ static uint32_t event_wait(void *h, uint64_t ns) {
     --e->waiters;
     int unlock = pthread_mutex_unlock(&e->lock); return result(unlock ? unlock : rc);
 }
+typedef struct {
+    pthread_mutex_t native;
+    _Atomic size_t users;
+    _Atomic uintptr_t owner;
+    size_t depth;
+    int recursive;
+} Mutex;
 static uint32_t mutex_create(uint32_t recursive, void **out) {
-    pthread_mutex_t *m = malloc(sizeof *m); if (!m) return DOTNET_PAL_OUT_OF_MEMORY;
+    Mutex *m = calloc(1, sizeof *m); if (!m) return DOTNET_PAL_OUT_OF_MEMORY;
     pthread_mutexattr_t attr; int rc = pthread_mutexattr_init(&attr);
     if (rc) { free(m); return result(rc); }
     rc = pthread_mutexattr_settype(&attr, recursive ? PTHREAD_MUTEX_RECURSIVE : PTHREAD_MUTEX_ERRORCHECK);
-    if (!rc) rc = pthread_mutex_init(m, &attr);
+    if (!rc) rc = pthread_mutex_init(&m->native, &attr);
     pthread_mutexattr_destroy(&attr);
-    if (rc) { free(m); return result(rc); } *out = m; return DOTNET_PAL_OK;
+    if (rc) { free(m); return result(rc); }
+    atomic_init(&m->users, 0); atomic_init(&m->owner, 0);
+    m->recursive = recursive != 0; *out = m; return DOTNET_PAL_OK;
 }
-static uint32_t mutex_destroy(void *h) { int rc = pthread_mutex_destroy(h); if (!rc) free(h); return result(rc); }
-static uint32_t mutex_lock(void *h) { return result(pthread_mutex_lock(h)); }
-static uint32_t mutex_unlock(void *h) { return result(pthread_mutex_unlock(h)); }
+static uint32_t mutex_destroy(void *h) {
+    Mutex *m = h;
+    if (atomic_load(&m->users)) return DOTNET_PAL_BUSY;
+    int rc = pthread_mutex_destroy(&m->native); if (!rc) free(m); return result(rc);
+}
+static uint32_t mutex_lock(void *h) {
+    Mutex *m = h; uintptr_t self = (uintptr_t)pthread_self();
+    if (atomic_load(&m->owner) == self && (!m->recursive || m->depth == SIZE_MAX)) return DOTNET_PAL_OS_ERROR;
+    size_t users = atomic_load(&m->users);
+    do { if (users == SIZE_MAX) return DOTNET_PAL_OS_ERROR; }
+    while (!atomic_compare_exchange_weak(&m->users, &users, users + 1));
+    int rc = pthread_mutex_lock(&m->native);
+    if (!rc) { ++m->depth; atomic_store(&m->owner, self); }
+    else atomic_fetch_sub(&m->users, 1);
+    return result(rc);
+}
+static uint32_t mutex_unlock(void *h) {
+    Mutex *m = h; uintptr_t self = (uintptr_t)pthread_self();
+    if (atomic_load(&m->owner) != self) return DOTNET_PAL_OS_ERROR;
+    if (--m->depth == 0) atomic_store(&m->owner, 0);
+    int rc = pthread_mutex_unlock(&m->native);
+    if (!rc) atomic_fetch_sub(&m->users, 1);
+    else { ++m->depth; atomic_store(&m->owner, self); }
+    return result(rc);
+}
 static uint32_t thread_create(dotnet_pal_thread_entry entry, void *arg, size_t size, void **out) {
     pthread_t *h = malloc(sizeof *h); if (!h) return DOTNET_PAL_OUT_OF_MEMORY;
     pthread_attr_t attr; int rc = pthread_attr_init(&attr);

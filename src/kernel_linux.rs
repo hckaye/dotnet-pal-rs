@@ -2,12 +2,18 @@
 //! Never move a pthread object after initialization and never form Rust references
 //! covering storage concurrently mutated by pthread functions.
 use super::*;
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 #[repr(C)]
 struct Event { mutex: libc::pthread_mutex_t, cond: libc::pthread_cond_t, manual: bool, signaled: bool, waiters: usize }
 #[repr(C)]
-struct Mutex { native: libc::pthread_mutex_t }
+struct Mutex {
+    native: libc::pthread_mutex_t,
+    users: AtomicUsize, // includes lock acquisitions waiting in pthread
+    owner: AtomicUsize,
+    depth: usize,      // accessed by the owner only, before native unlock
+    recursive: bool,
+}
 #[repr(C)]
 struct Thread { native: libc::pthread_t }
 #[repr(C)]
@@ -139,22 +145,50 @@ pub unsafe fn mutex_create(recursive: u32, out: *mut *mut c_void) -> u32 {
     if rc == 0 { rc = unsafe { libc::pthread_mutex_init(ptr::addr_of_mut!((*p).native), attr.as_ptr()) }; }
     unsafe { libc::pthread_mutexattr_destroy(attr.as_mut_ptr()); }
     if rc != 0 { unsafe { libc::free(p.cast()) }; return status(rc); }
-    unsafe { out.write(p.cast()) };
+    unsafe {
+        ptr::addr_of_mut!((*p).users).write(AtomicUsize::new(0));
+        ptr::addr_of_mut!((*p).owner).write(AtomicUsize::new(0));
+        (*p).recursive = recursive != 0;
+        out.write(p.cast());
+    }
     OK
 }
 pub unsafe fn mutex_destroy(h: *mut c_void) -> u32 {
     let Some(p) = handle::<Mutex>(h) else { return INVALID_ARGUMENT; };
+    // Destroying a locked pthread mutex is undefined by POSIX even when glibc
+    // happens to return EBUSY. Check our ownership state BEFORE entering libc.
+    // Concurrent lifecycle operations are still forbidden by the public contract.
+    if unsafe { (*p).users.load(Ordering::Acquire) } != 0 { return BUSY; }
     let rc = unsafe { libc::pthread_mutex_destroy(ptr::addr_of_mut!((*p).native)) };
     if rc == 0 { unsafe { libc::free(h) }; }
     status(rc)
 }
 pub unsafe fn mutex_lock(h: *mut c_void) -> u32 {
     let Some(p) = handle::<Mutex>(h) else { return INVALID_ARGUMENT; };
-    status(unsafe { libc::pthread_mutex_lock(ptr::addr_of_mut!((*p).native)) })
+    let current = unsafe { libc::pthread_self() as usize };
+    if unsafe { (*p).owner.load(Ordering::Acquire) } == current &&
+        (!unsafe { (*p).recursive } || unsafe { (*p).depth } == usize::MAX) { return OS_ERROR; }
+    if unsafe { (*p).users.fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_add(1)) }.is_err() {
+        return OS_ERROR;
+    }
+    let rc = unsafe { libc::pthread_mutex_lock(ptr::addr_of_mut!((*p).native)) };
+    if rc == 0 {
+        unsafe { (*p).depth += 1; (*p).owner.store(current, Ordering::Release); }
+    } else { unsafe { (*p).users.fetch_sub(1, Ordering::Release); } }
+    status(rc)
 }
 pub unsafe fn mutex_unlock(h: *mut c_void) -> u32 {
     let Some(p) = handle::<Mutex>(h) else { return INVALID_ARGUMENT; };
-    status(unsafe { libc::pthread_mutex_unlock(ptr::addr_of_mut!((*p).native)) })
+    let current = unsafe { libc::pthread_self() as usize };
+    if unsafe { (*p).owner.load(Ordering::Acquire) } != current { return OS_ERROR; }
+    unsafe {
+        (*p).depth -= 1;
+        if (*p).depth == 0 { (*p).owner.store(0, Ordering::Release); }
+    }
+    let rc = unsafe { libc::pthread_mutex_unlock(ptr::addr_of_mut!((*p).native)) };
+    if rc == 0 { unsafe { (*p).users.fetch_sub(1, Ordering::Release); } }
+    else { unsafe { (*p).depth += 1; (*p).owner.store(current, Ordering::Release); } }
+    status(rc)
 }
 extern "C" fn thread_start(data: *mut c_void) -> *mut c_void {
     unsafe {
