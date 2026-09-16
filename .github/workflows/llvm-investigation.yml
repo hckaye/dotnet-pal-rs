@@ -24,7 +24,7 @@ jobs:
           dotnet-version: '10.0.100'
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '25.9.0'
       - name: Rust and native prerequisites; linear adapter contract tests
         run: |
           rustup toolchain install 1.85.1 --profile minimal

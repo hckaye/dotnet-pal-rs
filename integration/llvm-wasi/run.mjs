@@ -3,6 +3,8 @@ import { WASI } from 'node:wasi';
 import { auditImports, auditMemory, MEMORY_BYTES } from './wasm_contract.mjs';
 if (process.argv.length !== 4 || !['baseline', 'wrapped', 'source'].includes(process.argv[3]))
   throw new Error('provide a managed core Wasm module and probe mode');
+const pin = JSON.parse(await readFile(new URL('./toolchain.json', import.meta.url), 'utf8'));
+if (process.versions.node !== pin.node_version) throw new Error('use audited Node ' + pin.node_version);
 const mode = process.argv[3];
 const wasi = new WASI({ version: 'preview1', args: ['LlvmGcProbe', mode], env: {}, returnOnExit: true });
 const bytes = await readFile(process.argv[2]);
