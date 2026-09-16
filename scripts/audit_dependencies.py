@@ -23,7 +23,9 @@ NETWORK = set('socket socketpair connect bind listen accept accept4 shutdown sen
 
 def classify(name):
     plain = name.split('@')[0]
-    if plain == 'dotnet_pal_get_api' or plain.startswith('dotnet_pal_host_'): return 'boundary'
+    if plain == 'dotnet_pal_get_api': return 'boundary'
+    if plain.startswith(('dotnet_pal_host_', 'dotnet_pal_storage_')):
+        return 'backend-hook-bypasses-runtime-boundary'
     if plain.startswith(('sig', 'pthread_sig')) or plain in ('getcontext', 'setcontext', 'swapcontext', 'makecontext', 'kill', 'raise'):
         return 'signals-and-context'
     if plain.startswith(('pthread_', 'sem_')): return 'threads-and-synchronization'
@@ -73,6 +75,45 @@ def inventory(path, nm, dynamic=False):
             'tool_warnings': process.stderr}
 
 
+def assess_runtime(runtime):
+    """Conservative link-reference gate, not a call-graph or syscall proof.
+
+    Weak imports remain dependencies. Only a strong public-entrypoint reference
+    establishes integration. Backend hooks belong below the runtime boundary.
+    Compiler/CRT/unwind names classify symbols, but do not approve their behavior.
+    """
+    references = [
+        {**item, 'category': classify(item['symbol']), 'binding': 'strong'}
+        for item in runtime['unresolved_strong']
+    ]
+    references.extend(
+        {'symbol': symbol, 'category': classify(symbol),
+         'owners': sorted(owners), 'binding': 'weak'}
+        for symbol, owners in sorted(runtime['unresolved_weak'].items())
+    )
+    has_entrypoint = any(
+        item['binding'] == 'strong'
+        and item['symbol'].split('@', 1)[0] == 'dotnet_pal_get_api'
+        for item in references
+    )
+    os_categories = {
+        'signals-and-context', 'threads-and-synchronization',
+        'memory-and-native-allocator', 'clock-and-scheduling',
+        'module-and-loader', 'process-environment-and-topology',
+        'files-and-io', 'network', 'raw-syscall-needs-callsite-review',
+        'backend-hook-bypasses-runtime-boundary',
+    }
+    bypasses = [i for i in references if i['category'] in os_categories]
+    unreviewed = [i for i in references
+                  if i['category'] not in os_categories and i['category'] != 'boundary']
+    return {
+        'has_runtime_entrypoint': has_entrypoint,
+        'runtime_os_references_outside_boundary': bypasses,
+        'runtime_unreviewed_references_outside_boundary': unreviewed,
+        'isolated_runtime': has_entrypoint and not bypasses and not unreviewed,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime', type=Path, required=True)
@@ -87,18 +128,14 @@ def main():
               'runtime': inventory(args.runtime.resolve(), args.nm),
               'rust_pal': inventory(args.pal.resolve(), args.nm),
               'executable': inventory(args.binary.resolve(), args.nm, dynamic=True)}
-    boundary_calls = [i for i in report['runtime']['unresolved_strong'] if i['category'] == 'boundary']
-    if not boundary_calls: raise SystemExit('rebuilt runtime does not reference the PAL entry point')
-    os_categories = {'signals-and-context', 'threads-and-synchronization', 'memory-and-native-allocator',
-        'clock-and-scheduling', 'module-and-loader', 'process-environment-and-topology',
-        'files-and-io', 'network', 'raw-syscall-needs-callsite-review'}
-    bypasses = [i for i in report['runtime']['unresolved_strong'] if i['category'] in os_categories]
-    report['runtime_os_references_outside_boundary'] = bypasses
-    report['isolated_runtime'] = not bypasses and all(i['category'] != 'other-needs-review' for i in report['runtime']['unresolved_strong'])
+    report.update(assess_runtime(report['runtime']))
+    bypasses = report['runtime_os_references_outside_boundary']
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(f"DEPENDENCY INVENTORY runtime_external={len(report['runtime']['unresolved_strong'])} remaining_os_references={len(bypasses)} output={args.output}")
     print('REMAINING OS REFERENCES: ' + ', '.join(i['symbol'] for i in bypasses))
+    if not report['has_runtime_entrypoint']:
+        raise SystemExit('rebuilt runtime lacks a strong reference to dotnet_pal_get_api')
     if args.require_isolated and not report['isolated_runtime']:
         raise SystemExit('runtime is not OS-isolated; do not label the whole runtime port complete')
 
