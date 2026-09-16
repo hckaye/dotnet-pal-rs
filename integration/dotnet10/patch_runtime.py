@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kernel_patch
 import runtime_patch
 import context_patch
+import unwind_patch
 
 REVISION = "4271d88e0aebf3d04f188f1334c2220d80555ef6"
 GC_FILE = "src/coreclr/gc/unix/gcenv.unix.cpp"
@@ -65,11 +66,12 @@ def main():
     head = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
     if head != REVISION:
         raise SystemExit(f"Expected {REVISION}, got {head}; re-audit before updating the pin")
-    subprocess.run(["git", "-C", str(root), "diff", "--exit-code", "HEAD", "--", GC_FILE, CMAKE_FILE, *kernel_patch.FILES, *context_patch.FILES], check=True)
+    subprocess.run(["git", "-C", str(root), "diff", "--exit-code", "HEAD", "--", GC_FILE, CMAKE_FILE, *kernel_patch.FILES, *context_patch.FILES, unwind_patch.FILE], check=True)
     gc = kernel_patch.gc_extra(patch_gc((root / GC_FILE).read_text()))
     extra = {path: transform((root / path).read_text()) for path, transform in kernel_patch.TRANSFORMS.items()}
     extra[kernel_patch.PAL] = context_patch.pal(runtime_patch.pal(extra[kernel_patch.PAL]))
     extra.update({path: transform((root / path).read_text()) for path, transform in context_patch.TRANSFORMS.items()})
+    extra[unwind_patch.FILE] = unwind_patch.transform((root / unwind_patch.FILE).read_text())
     cmake = (root / CMAKE_FILE).read_text()
     if MARKER in cmake:
         raise SystemExit("CMake is already patched")

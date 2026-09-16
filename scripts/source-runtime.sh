@@ -26,6 +26,9 @@ for collector in WorkstationGC ServerGC; do
   [[ ${#archives[@]} == 1 ]] || { echo "Expected exactly one rebuilt $collector archive" >&2; exit 1; }
   nm -u "${archives[0]}" > "artifacts/source-$collector-undefined.txt"
   grep -q 'dotnet_pal_get_api' "artifacts/source-$collector-undefined.txt"
+  if grep -Eq ' U pthread_rwlock_(rdlock|wrlock|unlock)$' "artifacts/source-$collector-undefined.txt"; then
+    echo 'unwinder lock bypassed the neutral mutex capability' >&2; exit 1
+  fi
   rm "$overlay/libRuntime.$collector.a"
   cp "${archives[0]}" "$overlay/libRuntime.$collector.a"
 done

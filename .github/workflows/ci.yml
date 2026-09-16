@@ -65,6 +65,7 @@ jobs:
             /src/coreclr/nativeaot/Runtime/thread.cpp
             /src/coreclr/nativeaot/Runtime/Crst.h
             /src/coreclr/nativeaot/Runtime/Crst.cpp
+            /src/native/external/llvm-libunwind/src/RWMutex.hpp
       - name: Validate source-patch applicability, not a runtime source build
         if: ${{ !cancelled() && steps.boundary.outcome == 'success' }}
         run: |
