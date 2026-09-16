@@ -174,6 +174,42 @@ typedef struct {
     uint64_t (*call_count)(uint32_t opcode);
     uint32_t (*read_stats)(dotnet_pal_wasi_stats*, size_t);
 } dotnet_pal_wasi_ops;
+/* Architecture-bound native context extension. Signal info, CPU context and
+ * previous actions are opaque SDK-native borrows, NOT portable wire structures.
+ * The adapter must check abi_tag AND previous-action size/alignment before use.
+ * Callback+data and previous-action storage live until process termination, even
+ * after restore (in-flight callbacks can finish). Install is once per kind.
+ * Callbacks may not unwind, allocate or enter managed code. Any suspension/wait
+ * protocol must be specifically proven safe for the interrupted runtime state;
+ * ordinary blocking PAL calls are not generally signal-safe. process_id_async
+ * and restore may be called by a signal callback;
+ * table lookup/registration must be completed before enabling signals.
+ */
+#define DOTNET_PAL_CAP_NATIVE_CONTEXT UINT64_C(131072)
+#define DOTNET_PAL_CONTEXT_LINUX_X64 UINT64_C(0x4c4e580000000001)
+#define DOTNET_PAL_CONTEXT_LINUX_ARM64 UINT64_C(0x4c4e580000000002)
+#define DOTNET_PAL_SIGNAL_ACTIVATION 0u
+#define DOTNET_PAL_SIGNAL_SEGMENTATION 1u
+#define DOTNET_PAL_SIGNAL_BUS 2u
+#define DOTNET_PAL_SIGNAL_FLOATING_POINT 3u
+#define DOTNET_PAL_SIGNAL_ILLEGAL_INSTRUCTION 4u
+typedef void (*dotnet_pal_signal_callback)(int32_t,void*,void*,void*);
+typedef struct {uint64_t installs,restores,requests,unblocks,thread_queries,rejected;} dotnet_pal_context_stats;
+typedef struct {
+    uint64_t (*abi_tag)(void);
+    size_t (*action_size)(void);
+    size_t (*action_alignment)(void);
+    uint32_t (*install)(uint32_t,dotnet_pal_signal_callback,void*,void*,size_t);
+    uint32_t (*restore)(uint32_t,const void*,size_t);
+    uint32_t (*unblock_activation)(void);
+    uint32_t (*request_activation)(uintptr_t);
+    uint32_t (*current_thread)(uintptr_t*);
+    uint32_t (*process_id_async)(uint64_t*);
+    uint32_t (*ignore_broken_pipe)(void);
+    uint32_t (*read_stats)(dotnet_pal_context_stats*,size_t);
+    int32_t (*signal_number)(uint32_t);
+} dotnet_pal_context_ops;
+typedef struct {dotnet_pal_header header;dotnet_pal_context_ops ops;} dotnet_pal_host_context;
 typedef struct {
     dotnet_pal_header header;
     dotnet_pal_vm_ops vm;
@@ -184,10 +220,12 @@ typedef struct {
     dotnet_pal_kernel_ops kernel;
     dotnet_pal_runtime_ops runtime;
     dotnet_pal_wasi_ops wasi;
+    dotnet_pal_context_ops context;
 } dotnet_pal_api;
 
 /* Use size checks BEFORE reading a capability group from a foreign table.
  * Each size marks the END of that group, not sizeof a future extended API. */
+#define DOTNET_PAL_CONTEXT_API_SIZE (offsetof(dotnet_pal_api, context) + sizeof(dotnet_pal_context_ops))
 #define DOTNET_PAL_WASI_API_SIZE (offsetof(dotnet_pal_api, wasi) + sizeof(dotnet_pal_wasi_ops))
 #define DOTNET_PAL_RUNTIME_API_SIZE (offsetof(dotnet_pal_api, runtime) + sizeof(dotnet_pal_runtime_ops))
 #define DOTNET_PAL_VM_API_SIZE offsetof(dotnet_pal_api, linear)
@@ -222,6 +260,7 @@ const dotnet_pal_host_services *dotnet_pal_host_services_v2(void);
 const dotnet_pal_host_kernel *dotnet_pal_host_kernel_v2(void);
 /* Required only by host-runtime. */
 const dotnet_pal_host_runtime *dotnet_pal_host_runtime_v2(void);
+const dotnet_pal_host_context *dotnet_pal_host_context_v2(void);
 #if defined(__cplusplus)
 [[noreturn]] void dotnet_pal_host_abort(void);
 #else

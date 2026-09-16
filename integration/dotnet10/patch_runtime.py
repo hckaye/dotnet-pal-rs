@@ -12,6 +12,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kernel_patch
 import runtime_patch
+import context_patch
 
 REVISION = "4271d88e0aebf3d04f188f1334c2220d80555ef6"
 GC_FILE = "src/coreclr/gc/unix/gcenv.unix.cpp"
@@ -64,10 +65,11 @@ def main():
     head = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
     if head != REVISION:
         raise SystemExit(f"Expected {REVISION}, got {head}; re-audit before updating the pin")
-    subprocess.run(["git", "-C", str(root), "diff", "--exit-code", "HEAD", "--", GC_FILE, CMAKE_FILE, *kernel_patch.FILES], check=True)
+    subprocess.run(["git", "-C", str(root), "diff", "--exit-code", "HEAD", "--", GC_FILE, CMAKE_FILE, *kernel_patch.FILES, *context_patch.FILES], check=True)
     gc = kernel_patch.gc_extra(patch_gc((root / GC_FILE).read_text()))
     extra = {path: transform((root / path).read_text()) for path, transform in kernel_patch.TRANSFORMS.items()}
-    extra[kernel_patch.PAL] = runtime_patch.pal(extra[kernel_patch.PAL])
+    extra[kernel_patch.PAL] = context_patch.pal(runtime_patch.pal(extra[kernel_patch.PAL]))
+    extra.update({path: transform((root / path).read_text()) for path, transform in context_patch.TRANSFORMS.items()})
     cmake = (root / CMAKE_FILE).read_text()
     if MARKER in cmake:
         raise SystemExit("CMake is already patched")
@@ -76,7 +78,7 @@ if(DOTNET_PAL_ROOT)
   if(NOT CLR_CMAKE_TARGET_LINUX)
     message(FATAL_ERROR "This source integration has only been prepared for Linux")
   endif()
-  add_definitions(-DDOTNET_PAL_GC_VM=1 -DDOTNET_PAL_KERNEL=1 -DDOTNET_PAL_RUNTIME=1)
+  add_definitions(-DDOTNET_PAL_GC_VM=1 -DDOTNET_PAL_KERNEL=1 -DDOTNET_PAL_RUNTIME=1 -DDOTNET_PAL_NATIVE_CONTEXT=1)
   include_directories("${DOTNET_PAL_ROOT}/include" "${DOTNET_PAL_ROOT}/native")
 endif()
 

@@ -35,6 +35,8 @@ jobs:
         run: bash scripts/kernel.sh
       - name: Runtime OS services and host contracts
         run: bash scripts/runtime.sh
+      - name: Native signal and activation contracts
+        run: bash scripts/context.sh
       - name: Actual NativeAOT GC negative and positive controls
         run: bash scripts/nativeaot.sh
       - name: Freestanding ARM64 boundary compile

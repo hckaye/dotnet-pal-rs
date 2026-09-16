@@ -41,11 +41,12 @@ Path("artifacts/source-manifest.json").write_text(json.dumps(manifest, indent=2)
 PYMANIFEST
 clang++ -std=c++17 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
   -DDOTNET_PAL_OBSERVER_ONLY -Iinclude -Inative -c integration/dotnet10/gc_wrap.cpp -o artifacts/gc_observer.o
-cargo build --release --no-default-features --features host-runtime --target-dir target/host-kernel
+cargo build --release --no-default-features --features host-context --target-dir target/host-kernel
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/services_host.c -o artifacts/services_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/kernel_host.c -o artifacts/kernel_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/runtime_host.c -o artifacts/runtime_host.o
-clang -r artifacts/host_backend.o artifacts/services_host.o artifacts/kernel_host.o artifacts/runtime_host.o -o artifacts/host_services_backend.o
+clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/context_host.c -o artifacts/context_host.o
+clang -r artifacts/host_backend.o artifacts/services_host.o artifacts/kernel_host.o artifacts/runtime_host.o artifacts/context_host.o -o artifacts/host_services_backend.o
 bash scripts/qualify.sh "$overlay" "$root/artifacts/source-manifest.json"
 for profile in workstation server; do
   collector=WorkstationGC

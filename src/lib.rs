@@ -21,6 +21,7 @@ pub mod services;
 pub mod kernel;
 pub mod runtime;
 pub mod wasi;
+pub mod context;
 #[cfg(feature = "linux")]
 #[path = "linux.rs"]
 mod backend;
@@ -92,6 +93,7 @@ pub struct Api {
     pub kernel: kernel::Ops,
     pub runtime: runtime::Ops,
     pub wasi: wasi::Ops,
+    pub context: context::Ops,
 }
 static RESERVE: Counter = Counter::new();
 static COMMIT: Counter = Counter::new();
@@ -224,7 +226,7 @@ mod linear_api {
 const API_BASE: Api = Api {
     header: Header {
         abi_version: ABI_VERSION, struct_size: mem::size_of::<Api>() as u32,
-        capabilities: (if cfg!(feature = "linear") { CAP_LINEAR } else { CAP_VM }) | services::CAPABILITIES | kernel::CAPABILITIES | runtime::CAPABILITIES | wasi::CAPABILITIES,
+        capabilities: (if cfg!(feature = "linear") { CAP_LINEAR } else { CAP_VM }) | services::CAPABILITIES | kernel::CAPABILITIES | runtime::CAPABILITIES | wasi::CAPABILITIES | context::CAPABILITIES,
     },
     #[cfg(not(feature = "linear"))]
     vm: vm::OPS,
@@ -239,6 +241,7 @@ const API_BASE: Api = Api {
     kernel: kernel::OPS,
     runtime: runtime::OPS,
     wasi: wasi::OPS,
+    context: context::OPS,
 };
 static API: Api = API_BASE;
 #[cfg(feature = "linux")]
@@ -253,7 +256,7 @@ static API_NO_BARRIER: Api = Api {
 /// The only runtime-facing PAL entry point. Valid before managed runtime startup.
 #[no_mangle]
 pub extern "C" fn dotnet_pal_get_api(version: u32) -> *const Api {
-    if version != ABI_VERSION || !services::available() || !kernel::available() || !runtime::available() { return ptr::null(); }
+    if version != ABI_VERSION || !services::available() || !kernel::available() || !runtime::available() || !context::available() { return ptr::null(); }
     #[cfg(not(feature = "linear"))]
     if !backend::page_size().is_power_of_two() { return ptr::null(); }
     #[cfg(feature = "linux")]
