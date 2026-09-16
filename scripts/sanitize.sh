@@ -11,7 +11,7 @@ mkdir -p "$out"
 ulimit -c 0
 export ASAN_OPTIONS=detect_leaks=1:detect_stack_use_after_return=1:halt_on_error=1:handle_segv=0:handle_sigbus=0
 # Use Clang's sanitizer runtime for the mixed-language final link.
-export TSAN_OPTIONS=halt_on_error=1:exitcode=66
+export TSAN_OPTIONS=halt_on_error=1:exitcode=66:handle_segv=0:handle_sigbus=0
 export RUSTFLAGS="-Zsanitizer=$sanitizer -Zexternal-clangrt -Cdebuginfo=1 -Cforce-frame-pointers=yes"
 common=(-O1 -g -fno-omit-frame-pointer -fsanitize="$sanitizer" -Wall -Wextra -Werror -Iinclude -Inative)
 for backend in linux host-runtime linear; do

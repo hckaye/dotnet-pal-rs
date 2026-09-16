@@ -9,3 +9,6 @@ timeout 60s artifacts/runtime/linux
 cargo build --release --no-default-features --features host-runtime --target-dir target/host-runtime
 cc -std=c11 -O2 -Wall -Wextra -Werror -Iinclude -DPAL_HOST_TEST tests/runtime.c tests/runtime_host.c tests/host_backend.c tests/services_host.c tests/kernel_host.c target/host-runtime/release/libdotnet_pal_rs.a -Wl,--gc-sections -lpthread -ldl -lm -o artifacts/runtime/host
 for fault in {0..9}; do timeout 60s artifacts/runtime/host "$fault"; done
+
+cc -std=c11 -O2 -Wall -Wextra -Werror -Iinclude tests/minipal_entropy.c native/minipal_entropy_adapter.c -o artifacts/runtime/minipal-entropy
+timeout 10s artifacts/runtime/minipal-entropy

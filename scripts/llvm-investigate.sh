@@ -9,12 +9,13 @@ exec > >(tee artifacts/llvm/driver.log) 2>&1
 : "${NUGET_PACKAGES:?provide an isolated package cache}"
 export MSBuildEnableWorkloadResolver=false
 project=samples/LlvmGcProbe/LlvmGcProbe.csproj
-cargo build --release --no-default-features --features linear-gc-small,wasi-clock --target wasm32-wasip1
+cargo build --release --no-default-features --features linear-gc-small,wasi-runtime --target wasm32-wasip1
 cc="$WASI_SDK_PATH/bin/clang"; cxx="$WASI_SDK_PATH/bin/clang++"
 # This PURE formatter must use the P2 SDK's error constants, matching the published
 # System.Native archive. It performs no OS calls or P2 imports. The P1 SDK has no
 # netdb.h. The final module's import audit still rejects every non-P1 dependency.
 "$cc" --target=wasm32-unknown-wasip2 -std=c11 -O2 -Wall -Wextra -Werror -c integration/llvm-wasi/p1_error_text.c -o artifacts/llvm/p1_error_text.o
+"$cc" --target=wasm32-unknown-wasip1 -std=c11 -O2 -Wall -Wextra -Werror -Iinclude -c native/minipal_entropy_adapter.c -o artifacts/llvm/minipal_entropy.o
 for mode in baseline wrapped; do
   extra=()
   [[ "$mode" != baseline ]] || extra=(-DDOTNET_PAL_OBSERVER_ONLY)

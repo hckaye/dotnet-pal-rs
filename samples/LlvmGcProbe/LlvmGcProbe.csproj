@@ -19,6 +19,7 @@
     <LinkerArg Include="-Wl,--max-memory=134217728" />
     <NativeLibrary Include="$(PalRoot)/artifacts/llvm/p1_error_text.o" />
     <NativeLibrary Include="$(PalObserverObject)" />
+    <NativeLibrary Include="$(PalRoot)/artifacts/llvm/minipal_entropy.o" />
     <NativeLibrary Include="$(PalLib)" />
     <NativeLibrary Include="$(PalBridgeObject)" Condition="'$(PalBridgeObject)' != ''" />
   </ItemGroup>
