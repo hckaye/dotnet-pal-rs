@@ -84,7 +84,9 @@ jobs:
       - name: Execute C to Rust boundary in three Wasm target modules
         run: bash scripts/wasm.sh
       - name: Real WASIp1 clock import and injected failure
-        run: bash scripts/wasi-clock.sh
+        run: |
+          bash scripts/wasi-clock.sh
+          bash scripts/wasi-runtime.sh
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
