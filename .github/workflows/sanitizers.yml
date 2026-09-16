@@ -6,7 +6,11 @@ on:
 permissions:
   contents: read
 jobs:
-  address:
+  instrumented:
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address, thread]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -21,11 +25,11 @@ jobs:
       - name: Instrument Rust, core and C/C++ callers together
         run: |
           set -o pipefail
-          mkdir -p artifacts/asan
-          bash scripts/sanitize.sh address 2>&1 | tee artifacts/asan/run.log
+          mkdir -p artifacts/${{ matrix.sanitizer }}
+          bash scripts/sanitize.sh ${{ matrix.sanitizer }} 2>&1 | tee artifacts/${{ matrix.sanitizer }}/run.log
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: mixed-language-sanitizer-evidence
-          path: artifacts/asan/*.log
+          name: mixed-language-${{ matrix.sanitizer }}-evidence
+          path: artifacts/${{ matrix.sanitizer }}/*.log
           if-no-files-found: error
