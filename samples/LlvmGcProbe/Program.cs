@@ -63,6 +63,7 @@ public static class Program
         // manufactured by later allocation or finalization tests.
         Console.WriteLine("WASM QUALIFICATION BEGIN mode=" + args[0]);
         WasmQualification.Run();
+        BclQualification.Run();
         Check(Observe(out StorageStats exhaustedStorage, out AdapterStats exhausted, out ServicesStats exhaustedServices) == 0, "post-OOM observer failed");
         if (wrapped)
         {
