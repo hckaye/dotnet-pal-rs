@@ -21,7 +21,7 @@ for backend in linux host-runtime linear linear-heap host-elf; do
   if [[ "$backend" == host-elf ]]; then
     clang -std=c11 "${common[@]}" -DPAL_ELF_FAULT_HOST tests/elf.c tests/elf_host.c tests/context_host.c \
       tests/runtime_host.c tests/host_backend.c tests/services_host.c tests/kernel_host.c "$lib" \
-      -Wl,--gc-sections -Wl,--export-dynamic -lpthread -ldl -lm -o "$out/elf-host"
+      -Wl,--gc-sections -Wl,--export-dynamic-symbol=dotnet_pal_elf_test_anchor -lpthread -ldl -lm -o "$out/elf-host"
     for mode in {0..11}; do timeout 120s "$out/elf-host" "$mode"; done
   elif [[ "$backend" == linear-heap ]]; then
     clang -std=c11 "${common[@]}" tests/linear_heap.c "$lib" -Wl,--gc-sections -lpthread -ldl -lm -o "$out/linear-heap"
@@ -41,7 +41,7 @@ for backend in linux host-runtime linear linear-heap host-elf; do
     if [[ "$backend" == linux ]]; then
       clang++ -std=c++17 -fno-exceptions -fno-rtti "${common[@]}" tests/unwind_lock.cpp "$lib" -Wl,--gc-sections -lpthread -ldl -lm -o "$out/unwind-lock"
       timeout 120s "$out/unwind-lock"
-      clang -std=c11 "${common[@]}" tests/elf.c "$lib" -Wl,--gc-sections -Wl,--export-dynamic \
+      clang -std=c11 "${common[@]}" tests/elf.c "$lib" -Wl,--gc-sections -Wl,--export-dynamic-symbol=dotnet_pal_elf_test_anchor \
         -lpthread -ldl -lm -o "$out/elf-linux"
       timeout 120s "$out/elf-linux"
     fi

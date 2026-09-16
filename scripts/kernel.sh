@@ -18,6 +18,9 @@ for mode in {1..8}; do timeout 10s artifacts/kernel_faults-host "$mode"; done
 c++ -std=c++17 -O2 -Wall -Wextra -Werror -Iinclude -Inative tests/kernel_adapter.cpp -o artifacts/kernel-adapter
 timeout 10s artifacts/kernel-adapter
 
-clang++ -std=c++17 -O2 -fno-exceptions -fno-rtti -fuse-ld=lld -Wall -Wextra -Werror -Iinclude -Inative tests/unwind_lock.cpp \
-  target/release/libdotnet_pal_rs.a -Wl,--gc-sections -lpthread -ldl -lm -o artifacts/unwind-lock
+# Like NativeAOT, this C++ code needs no C++ standard-library runtime. Link its
+# C-only object using the C driver, rather than injecting libstdc++ dependencies.
+clang++ -std=c++17 -O2 -fno-exceptions -fno-rtti -Wall -Wextra -Werror -Iinclude -Inative \
+  -c tests/unwind_lock.cpp -o artifacts/unwind-lock.o
+cc artifacts/unwind-lock.o target/release/libdotnet_pal_rs.a -Wl,--gc-sections -lpthread -ldl -lm -o artifacts/unwind-lock
 timeout 60s artifacts/unwind-lock
