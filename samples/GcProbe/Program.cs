@@ -37,6 +37,64 @@ internal static class Program
             throw new InvalidOperationException("kernel observer unavailable");
         return stats;
     }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ContextStats { public ulong Installs, Restores, Requests, Unblocks, Threads, Rejected; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RuntimeStats
+    {
+        public ulong Environment, Identity, Realtime, Entropy, MappingAllocate, MappingRelease, MappingProtect;
+        public ulong ModuleOpen, ModuleSymbol, ModuleClose, ModuleInfo, Failed;
+    }
+    [DllImport("__Internal",EntryPoint="dotnet_pal_probe_context_stats")]
+    private static extern uint ReadContextStats(out ContextStats stats,nuint size);
+    [DllImport("__Internal",EntryPoint="dotnet_pal_probe_runtime_stats")]
+    private static extern uint ReadRuntimeStats(out RuntimeStats stats,nuint size);
+    private static int stopBusy;
+    private static long busyChecksum;
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void BusyManagedLoop(ManualResetEventSlim ready)
+    {
+        long checksum=17;
+        ready.Set();
+        // No allocations or calls after ready: collections must coordinate with
+        // a running managed thread, not just wait for an allocation slow path.
+        while (Volatile.Read(ref stopBusy)==0)
+            checksum=unchecked((checksum*6364136223846793005L)^0x12345678);
+        Interlocked.Exchange(ref busyChecksum,checksum);
+    }
+    private static void ActivationAndRuntimeProbe(bool routed)
+    {
+        Require(ReadContextStats(out ContextStats before,48)==0,"context observer unavailable");
+        using var ready=new ManualResetEventSlim(false);
+        stopBusy=0;
+        var worker=new Thread(()=>BusyManagedLoop(ready));worker.Start();
+        Require(ready.Wait(TimeSpan.FromSeconds(10)),"busy thread did not start");
+        try
+        {
+            for(int i=0;i<16;++i)
+                GC.Collect(GC.MaxGeneration,GCCollectionMode.Forced,blocking:true,compacting:true);
+        }
+        finally
+        {
+            Volatile.Write(ref stopBusy,1);
+            Require(worker.Join(TimeSpan.FromSeconds(10)),"busy thread did not resume");
+        }
+        Require(ReadContextStats(out ContextStats after,48)==0,"context observer unavailable");
+        Require(ReadRuntimeStats(out RuntimeStats runtime,96)==0,"runtime observer unavailable");
+        if(routed)
+        {
+            Require(after.Installs>=2 && after.Requests>before.Requests && after.Unblocks>0 && after.Threads>0,
+                "actual GC activation did not use the native context capability");
+            Require(runtime.Identity>0 && runtime.ModuleInfo>0,"runtime identity/module discovery bypassed PAL");
+        }
+        else
+        {
+            Require(after.Installs==0 && after.Requests==0 && after.Unblocks==0 && after.Threads==0,
+                "negative control unexpectedly invoked native context operations");
+            Require(runtime.Identity==0 && runtime.ModuleInfo==0,"negative control unexpectedly invoked runtime operations");
+        }
+        Console.WriteLine($"NATIVE CONTEXT GC PASS routed={routed} installs={after.Installs} requests_before={before.Requests} requests_after={after.Requests} threads={after.Threads} identity={runtime.Identity} modules={runtime.ModuleInfo} checksum={busyChecksum}");
+    }
     private static int finalized;
     private sealed class FinalizerCanary
     {
@@ -104,6 +162,7 @@ internal static class Program
         Stats before = Snapshot();
         ServicesStats servicesBefore = ServicesSnapshot();
         KernelStats kernelBefore = KernelSnapshot();
+        ActivationAndRuntimeProbe(sourceKernel);
         for (int wave = 0; wave < 3; wave++)
         {
             AllocateWave();

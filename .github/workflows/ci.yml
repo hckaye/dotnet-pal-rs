@@ -58,6 +58,9 @@ jobs:
             /src/coreclr/gc/unix/events.cpp
             /src/coreclr/nativeaot/Runtime/CMakeLists.txt
             /src/coreclr/nativeaot/Runtime/unix/PalUnix.cpp
+            /src/coreclr/nativeaot/Runtime/unix/UnixSignals.cpp
+            /src/coreclr/nativeaot/Runtime/unix/UnixSignals.h
+            /src/coreclr/nativeaot/Runtime/thread.cpp
             /src/coreclr/nativeaot/Runtime/Crst.h
             /src/coreclr/nativeaot/Runtime/Crst.cpp
       - name: Validate source-patch applicability, not a runtime source build

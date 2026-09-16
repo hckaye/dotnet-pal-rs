@@ -16,3 +16,9 @@ class ContextPatchTests(unittest.TestCase):
         out=context_patch.thread('    m_hOSThread = pthread_self();')
         self.assertIn('static_cast<pthread_t>',out)
         self.assertIn('pthread_self()',out)
+
+    def test_ci_sparse_source_includes_all_patch_inputs(self):
+        import patch_runtime,kernel_patch
+        workflow=(Path(__file__).resolve().parents[1]/'.github/workflows/ci.yml').read_text()
+        for name in [patch_runtime.GC_FILE,patch_runtime.CMAKE_FILE,*kernel_patch.FILES,*context_patch.FILES]:
+            self.assertIn('/'+name,workflow,'CI sparse checkout would omit '+name)
