@@ -25,12 +25,7 @@ static void *worker(void *arg) {
     }
     *(uint64_t*)arg = tid; return NULL;
 }
-static void readonly_fault(uint8_t *address) {
-    pid_t child = fork(); assert(child >= 0);
-    if (child == 0) { *(volatile uint8_t*)address = 1; _exit(0); }
-    int state = 0; assert(waitpid(child, &state, 0) == child);
-    assert(WIFSIGNALED(state) && (WTERMSIG(state) == SIGSEGV || WTERMSIG(state) == SIGBUS));
-}
+#include "fault_probe.h"
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
 #ifdef PAL_HOST_TEST
@@ -90,7 +85,7 @@ int main(int argc, char **argv) {
     assert(r->mapping_allocate(page*3, 3, &raw) == 0 && raw);
     uint8_t *memory = raw; memory[0]=23; memory[page]=45; memory[page*2]=67;
     assert(r->mapping_protect(memory+page, page, DOTNET_PAL_READ) == 0);
-    assert(memory[page] == 45); readonly_fault(memory+page);
+    assert(memory[page] == 45); pal_test_must_fault(memory+page, 1);
     assert(memory[0] == 23 && memory[page*2] == 67);
     assert(r->mapping_protect(memory+page, page, DOTNET_PAL_READ|DOTNET_PAL_WRITE) == 0);
     memory[page]=89; assert(r->mapping_release(raw, page*3) == 0);

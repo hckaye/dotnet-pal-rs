@@ -10,19 +10,7 @@
 #include <unistd.h>
 
 static const dotnet_pal_api *api;
-static void must_fault(void *address) {
-    pid_t child = fork();
-    assert(child >= 0);
-    if (child == 0) {
-        volatile unsigned char value = *(volatile unsigned char *)address;
-        (void)value;
-        _exit(0);
-    }
-    int status = 0;
-    assert(waitpid(child, &status, 0) == child);
-    assert(WIFSIGNALED(status));
-    assert(WTERMSIG(status) == SIGSEGV || WTERMSIG(status) == SIGBUS);
-}
+#include "fault_probe.h"
 static void *worker(void *arg) {
     (void)arg;
     const size_t page = api->vm.page_size();
@@ -62,21 +50,21 @@ int main(void) {
 
     assert(api->vm.reserve(2 * page - 1, 16 * page, 0, &p) == DOTNET_PAL_OK);
     assert((uintptr_t)p % (16 * page) == 0);
-    must_fault(p); // reserve means inaccessible, not merely malloc
+    pal_test_must_fault(p, 0); // reserve means inaccessible, not merely malloc
     assert(api->vm.commit(p, 2 * page - 1) == DOTNET_PAL_OK);
     memset(p, 0xa5, 2 * page);
     assert(api->vm.commit(p, page) == DOTNET_PAL_OK);
     assert(((unsigned char *)p)[0] == 0xa5); // idempotent commit preserves contents
     assert(api->vm.commit((char *)p + 1, page) == DOTNET_PAL_INVALID_ARGUMENT);
     assert(api->vm.decommit(p, page) == DOTNET_PAL_OK);
-    must_fault(p);
+    pal_test_must_fault(p, 0);
     assert(((unsigned char *)p)[page] == 0xa5); // adjacent page must remain intact
     assert(api->vm.commit(p, page) == DOTNET_PAL_OK);
     for (size_t i = 0; i < page; ++i) assert(((unsigned char *)p)[i] == 0);
     assert(api->vm.reset((char *)p + page, page) == DOTNET_PAL_OK);
     ((volatile unsigned char *)p)[page] = 0x42; // reset does not remove accessibility
     assert(api->vm.release(p, 2 * page - 1) == DOTNET_PAL_OK);
-    must_fault(p);
+    pal_test_must_fault(p, 0);
 
     pthread_t threads[4];
     for (int i = 0; i < 4; ++i) assert(pthread_create(&threads[i], NULL, worker, NULL) == 0);
