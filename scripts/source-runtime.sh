@@ -10,6 +10,7 @@ case "$(uname -m)" in x86_64) arch=x64;; aarch64) arch=arm64;; *) exit 2;; esac
 mkdir -p artifacts
 python3 integration/dotnet10/patch_runtime.py "$runtime" --check
 python3 integration/dotnet10/patch_runtime.py "$runtime"
+bash scripts/unwind-cache.sh "$runtime"
 if ! "$runtime/src/coreclr/build-runtime.sh" -release -arch "$arch" -component nativeaot -ninja \
   -cmakeargs "-DDOTNET_PAL_ROOT=$root" > artifacts/source-build.log 2>&1; then
   tail -n 100 artifacts/source-build.log; exit 1
@@ -41,13 +42,20 @@ Path("artifacts/source-manifest.json").write_text(json.dumps(manifest, indent=2)
 PYMANIFEST
 clang++ -std=c++17 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
   -DDOTNET_PAL_OBSERVER_ONLY -Iinclude -Inative -c integration/dotnet10/gc_wrap.cpp -o artifacts/gc_observer.o
-cargo build --release --no-default-features --features host-context --target-dir target/host-kernel
+cargo build --release --no-default-features --features host-context,host-support --target-dir target/host-kernel
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/services_host.c -o artifacts/services_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/kernel_host.c -o artifacts/kernel_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/runtime_host.c -o artifacts/runtime_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/context_host.c -o artifacts/context_host.o
-clang -r artifacts/host_backend.o artifacts/services_host.o artifacts/kernel_host.o artifacts/runtime_host.o artifacts/context_host.o -o artifacts/host_services_backend.o
+clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c native/support_posix.c -o artifacts/support_host.o
+clang -r artifacts/support_host.o artifacts/host_backend.o artifacts/services_host.o artifacts/kernel_host.o artifacts/runtime_host.o artifacts/context_host.o -o artifacts/host_services_backend.o
 bash scripts/qualify.sh "$overlay" "$root/artifacts/source-manifest.json"
+# Initialization alone prepares dump arguments; these runs do NOT create a dump.
+for backend in linux host; do
+  DOTNET_DbgEnableMiniDump=1 PAL_EXPECT_NATIVE_HEAP=1 \
+    timeout 120s "artifacts/qualification/workstation-$backend/GcProbe" source-kernel \
+    > "artifacts/qualification/workstation-$backend/support-startup.log" 2>&1
+done
 for profile in workstation server; do
   collector=WorkstationGC
   [[ "$profile" != server ]] || collector=ServerGC

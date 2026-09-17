@@ -13,6 +13,8 @@ crate-type = ["staticlib", "rlib"]
 default = ["linux"]
 linux = ["dep:libc"]
 host = []
+# Optional native helper services; legacy host configurations remain unchanged.
+host-support = ["host"]
 linear = []
 # On-demand storage supplied by the embedder; shares the native C heap on WASI.
 linear-heap = ["linear"]

@@ -96,6 +96,17 @@ The VM-only adapter rejects a linear-only backend.
 See [architecture](docs/architecture.md), [kernel contracts](docs/kernel.md),
 [clock contracts](docs/services.md) and [qualification](docs/qualification.md).
 
+## Native helper services
+
+The append-only `support` group adds native helper allocation/resize, reader/writer
+locks, thread names and diagnostic output. It has Linux and explicit `host-support`
+providers, paired source integration in libunwind/dump formatting, and guarded
+startup initialization. See [native helper contracts](docs/native-support.md).
+
+```sh
+bash scripts/support.sh
+```
+
 ## Native contracts and managed qualification
 
 Prerequisites: Rust 1.85.1, C/C++ compiler, Clang, binutils, Python 3 and Linux

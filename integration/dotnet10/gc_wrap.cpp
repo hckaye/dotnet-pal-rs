@@ -58,3 +58,10 @@ extern "C" uint32_t dotnet_pal_probe_runtime_stats(dotnet_pal_runtime_stats *out
     if(!p || p->header.struct_size<DOTNET_PAL_RUNTIME_API_SIZE || !p->runtime.read_stats)return DOTNET_PAL_UNSUPPORTED;
     return p->runtime.read_stats(out,size);
 }
+
+// Observation only: support functions are invoked by the rebuilt runtime.
+extern "C" uint32_t dotnet_pal_probe_support_stats(dotnet_pal_support_stats *out,size_t size) {
+    const auto *p=dotnet_pal_get_api(DOTNET_PAL_ABI_VERSION);
+    if(!p || p->header.struct_size<DOTNET_PAL_SUPPORT_API_SIZE || !p->support.read_stats)return DOTNET_PAL_UNSUPPORTED;
+    return p->support.read_stats(out,size);
+}

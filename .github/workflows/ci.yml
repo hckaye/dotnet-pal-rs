@@ -35,6 +35,8 @@ jobs:
         run: bash scripts/kernel.sh
       - name: Runtime OS services and host contracts
         run: bash scripts/runtime.sh
+      - name: Native helper heap, rwlocks, diagnostics and failure contracts
+        run: bash scripts/support.sh
       - name: Native signal and activation contracts
         run: bash scripts/context.sh
       - name: Demand-allocated linear storage and eight-thread failure contracts
@@ -62,6 +64,11 @@ jobs:
             /src/coreclr/nativeaot/Runtime/unix/PalUnix.cpp
             /src/coreclr/nativeaot/Runtime/unix/UnixSignals.cpp
             /src/coreclr/nativeaot/Runtime/unix/UnixSignals.h
+            /src/coreclr/nativeaot/Runtime/unix/PalCreateDump.cpp
+            /src/native/external/llvm-libunwind/src/libunwind.cpp
+            /src/native/external/llvm-libunwind/src/RWMutex.hpp
+            /src/native/external/llvm-libunwind/src/config.h
+            /src/native/external/llvm-libunwind/src/UnwindCursor.hpp
             /src/coreclr/nativeaot/Runtime/thread.cpp
             /src/coreclr/nativeaot/Runtime/Crst.h
             /src/coreclr/nativeaot/Runtime/Crst.cpp
@@ -115,7 +122,7 @@ jobs:
           rustup override set 1.85.1
           for target in aarch64-unknown-none riscv64gc-unknown-none-elf thumbv7em-none-eabi; do
             rustup target add "$target"
-            for profile in host host-services host-kernel linear-heap; do
+            for profile in host host-services host-kernel host-support linear-heap; do
               cargo build --release --no-default-features --features "$profile" --target "$target"
             done
           done

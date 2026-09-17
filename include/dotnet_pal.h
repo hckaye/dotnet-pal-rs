@@ -211,6 +211,39 @@ typedef struct {
     int32_t (*signal_number)(uint32_t);
 } dotnet_pal_context_ops;
 typedef struct {dotnet_pal_header header;dotnet_pal_context_ops ops;} dotnet_pal_host_context;
+
+/* Native helper heap, rwlocks and diagnostics are NOT GC virtual memory.
+ * Heap results use the target C allocator alignment. Resize failure preserves
+ * the old allocation; zero-sized requests are rejected. Closing/resize requires
+ * exclusive lifetime ownership. No callback may unwind or reenter the PAL.
+ * write_stderr completes the request or returns an error with validated progress.
+ * Only write_stderr is required to be async-signal-safe after table negotiation.
+ * Thread names are UTF-8/byte strings without NUL; Linux accepts at most 15 bytes.
+ */
+#define DOTNET_PAL_CAP_NATIVE_HEAP UINT64_C(524288)
+#define DOTNET_PAL_CAP_RWLOCK UINT64_C(1048576)
+#define DOTNET_PAL_CAP_THREAD_NAME UINT64_C(2097152)
+#define DOTNET_PAL_CAP_DIAGNOSTICS UINT64_C(4194304)
+#define DOTNET_PAL_CAP_SUPPORT UINT64_C(7864320)
+typedef struct {
+    uint64_t allocate_ok, resize_ok, release_ok, rw_create_ok, rw_read_ok;
+    uint64_t rw_write_ok, rw_unlock_ok, rw_destroy_ok, write_ok, name_ok, rejected;
+} dotnet_pal_support_stats;
+typedef struct {
+    uint32_t (*allocate)(size_t size, uint32_t zero, void **out);
+    uint32_t (*resize)(void *address, size_t new_size, void **out);
+    uint32_t (*release)(void *address);
+    uint32_t (*rw_create)(void **out);
+    uint32_t (*rw_read)(void *handle);
+    uint32_t (*rw_write)(void *handle);
+    uint32_t (*rw_unlock)(void *handle);
+    uint32_t (*rw_destroy)(void *handle);
+    uint32_t (*write_stderr)(const uint8_t *data, size_t size, size_t *written);
+    uint32_t (*thread_name)(const uint8_t *name, size_t length);
+    uint32_t (*read_stats)(dotnet_pal_support_stats *out, size_t size);
+} dotnet_pal_support_ops;
+typedef struct {dotnet_pal_header header;dotnet_pal_support_ops ops;} dotnet_pal_host_support;
+
 typedef struct {
     dotnet_pal_header header;
     dotnet_pal_vm_ops vm;
@@ -222,10 +255,12 @@ typedef struct {
     dotnet_pal_runtime_ops runtime;
     dotnet_pal_wasi_ops wasi;
     dotnet_pal_context_ops context;
+    dotnet_pal_support_ops support;
 } dotnet_pal_api;
 
 /* Use size checks BEFORE reading a capability group from a foreign table.
  * Each size marks the END of that group, not sizeof a future extended API. */
+#define DOTNET_PAL_SUPPORT_API_SIZE (offsetof(dotnet_pal_api, support) + sizeof(dotnet_pal_support_ops))
 #define DOTNET_PAL_CONTEXT_API_SIZE (offsetof(dotnet_pal_api, context) + sizeof(dotnet_pal_context_ops))
 #define DOTNET_PAL_WASI_API_SIZE (offsetof(dotnet_pal_api, wasi) + sizeof(dotnet_pal_wasi_ops))
 #define DOTNET_PAL_RUNTIME_API_SIZE (offsetof(dotnet_pal_api, runtime) + sizeof(dotnet_pal_runtime_ops))
@@ -273,6 +308,8 @@ const dotnet_pal_host_kernel *dotnet_pal_host_kernel_v2(void);
 /* Required only by host-runtime. */
 const dotnet_pal_host_runtime *dotnet_pal_host_runtime_v2(void);
 const dotnet_pal_host_context *dotnet_pal_host_context_v2(void);
+/* Required only by host-support. */
+const dotnet_pal_host_support *dotnet_pal_host_support_v2(void);
 #if defined(__cplusplus)
 [[noreturn]] void dotnet_pal_host_abort(void);
 #else
