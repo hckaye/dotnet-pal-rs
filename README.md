@@ -107,6 +107,14 @@ startup initialization. See [native helper contracts](docs/native-support.md).
 bash scripts/support.sh
 ```
 
+## Loaded-image metadata
+
+The `images` group exposes explicitly tagged ELF64 metadata and symbol information,
+with native runtime/libunwind adapters and a replaceable `host-images` provider.
+It preserves loader-generation information for cache invalidation. See
+[loaded-image contracts](docs/images.md). Run `bash scripts/images.sh` for real
+Linux metadata tests and malformed-provider regressions.
+
 ## Native contracts and managed qualification
 
 Prerequisites: Rust 1.85.1, C/C++ compiler, Clang, binutils, Python 3 and Linux

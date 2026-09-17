@@ -65,3 +65,9 @@ extern "C" uint32_t dotnet_pal_probe_support_stats(dotnet_pal_support_stats *out
     if(!p || p->header.struct_size<DOTNET_PAL_SUPPORT_API_SIZE || !p->support.read_stats)return DOTNET_PAL_UNSUPPORTED;
     return p->support.read_stats(out,size);
 }
+
+extern "C" uint32_t dotnet_pal_probe_image_stats(dotnet_pal_image_stats *out,size_t size) {
+    const auto *p=dotnet_pal_get_api(DOTNET_PAL_ABI_VERSION);
+    if(!p || p->header.struct_size<DOTNET_PAL_IMAGES_API_SIZE || !p->images.read_stats)return DOTNET_PAL_UNSUPPORTED;
+    return p->images.read_stats(out,size);
+}

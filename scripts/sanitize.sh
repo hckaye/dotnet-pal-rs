@@ -14,7 +14,7 @@ export ASAN_OPTIONS=detect_leaks=1:detect_stack_use_after_return=1:halt_on_error
 export TSAN_OPTIONS=halt_on_error=1:exitcode=66:handle_segv=0:handle_sigbus=0
 export RUSTFLAGS="-Zsanitizer=$sanitizer -Zexternal-clangrt -Cdebuginfo=1 -Cforce-frame-pointers=yes"
 common=(-O1 -g -fno-omit-frame-pointer -fsanitize="$sanitizer" -Wall -Wextra -Werror -Iinclude -Inative)
-for backend in linux host-runtime host-support linear linear-heap; do
+for backend in linux host-runtime host-support host-images linear linear-heap; do
   cargo "+$rust" build -Zbuild-std=core,compiler_builtins --release --no-default-features \
     --features "$backend" --target "$triple" --target-dir "target/$sanitizer-$backend"
   lib="target/$sanitizer-$backend/$triple/release/libdotnet_pal_rs.a"
@@ -23,6 +23,11 @@ for backend in linux host-runtime host-support linear linear-heap; do
     timeout 120s "$out/support-host"
     clang -std=c11 "${common[@]}" tests/support_faults.c tests/host_backend.c "$lib" -Wl,--gc-sections -lpthread -ldl -lm -o "$out/support-faults"
     for mode in {1..12}; do timeout 30s "$out/support-faults" "$mode"; done
+  elif [[ "$backend" == host-images ]]; then
+    clang -std=c11 "${common[@]}" tests/images.c native/images_linux.c tests/host_backend.c "$lib" -Wl,--gc-sections -lpthread -ldl -lm -o "$out/images-host"
+    timeout 120s "$out/images-host"
+    clang -std=c11 "${common[@]}" tests/images_host.c tests/host_backend.c "$lib" -Wl,--gc-sections -lpthread -ldl -lm -o "$out/images-faults"
+    for mode in {0..12}; do timeout 30s "$out/images-faults" "$mode"; done
   elif [[ "$backend" == linear-heap ]]; then
     clang -std=c11 "${common[@]}" tests/linear_heap.c "$lib" -lpthread -ldl -lm -o "$out/linear-heap"
     timeout 120s "$out/linear-heap"
@@ -39,7 +44,7 @@ for backend in linux host-runtime host-support linear linear-heap; do
       providers=(tests/host_backend.c tests/services_host.c tests/kernel_host.c tests/runtime_host.c)
     fi
     suites=(abi services kernel runtime)
-    if [[ "$backend" == linux ]]; then suites+=(support); fi
+    if [[ "$backend" == linux ]]; then suites+=(support images); fi
     for suite in "${suites[@]}"; do
       clang -std=c11 "${common[@]}" "tests/$suite.c" "${providers[@]}" "$lib" \
         -Wl,--gc-sections -lpthread -ldl -lm -o "$out/$backend-$suite"

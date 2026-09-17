@@ -244,6 +244,43 @@ typedef struct {
 } dotnet_pal_support_ops;
 typedef struct {dotnet_pal_header header;dotnet_pal_support_ops ops;} dotnet_pal_host_support;
 
+/* Loader-owned ELF64 little-endian image metadata, not OS-specific dl_phdr_info.
+ * All views/strings are borrowed only for the synchronous callback; do not unload
+ * or load modules from the callback. Headers contain header_count 56-byte ELF64
+ * program headers. TLS data is not exposed. Loader generation counters preserve
+ * unwind cache invalidation on image changes. No arbitrary-format port is implied.
+ */
+#define DOTNET_PAL_CAP_ELF_IMAGES UINT64_C(8388608)
+#define DOTNET_PAL_CAP_SYMBOL_INFO UINT64_C(16777216)
+#define DOTNET_PAL_CAP_IMAGES UINT64_C(25165824)
+#define DOTNET_PAL_IMAGE_ELF64_LE 1u
+typedef struct {
+    uint32_t format, reserved;
+    uintptr_t load_bias;
+    const uint8_t *name;
+    size_t name_length;
+    const uint8_t *headers;
+    size_t header_count;
+    uint64_t added, removed;
+} dotnet_pal_image_view;
+typedef struct {
+    void *base;
+    const uint8_t *name;
+    size_t name_length;
+    void *symbol_address;
+    const uint8_t *symbol_name;
+    size_t symbol_name_length;
+} dotnet_pal_symbol_info;
+typedef int32_t (*dotnet_pal_image_visitor)(const dotnet_pal_image_view*, void*);
+typedef struct {uint64_t iterate_ok, images_seen, address_ok, rejected;} dotnet_pal_image_stats;
+typedef struct {
+    uint32_t (*iterate)(dotnet_pal_image_visitor, void*, int32_t *result);
+    uint32_t (*address_info)(void*, dotnet_pal_symbol_info*);
+    uint32_t (*read_stats)(dotnet_pal_image_stats*, size_t);
+} dotnet_pal_image_ops;
+typedef struct {dotnet_pal_header header;dotnet_pal_image_ops ops;} dotnet_pal_host_images;
+
+
 typedef struct {
     dotnet_pal_header header;
     dotnet_pal_vm_ops vm;
@@ -256,10 +293,12 @@ typedef struct {
     dotnet_pal_wasi_ops wasi;
     dotnet_pal_context_ops context;
     dotnet_pal_support_ops support;
+    dotnet_pal_image_ops images;
 } dotnet_pal_api;
 
 /* Use size checks BEFORE reading a capability group from a foreign table.
  * Each size marks the END of that group, not sizeof a future extended API. */
+#define DOTNET_PAL_IMAGES_API_SIZE (offsetof(dotnet_pal_api, images) + sizeof(dotnet_pal_image_ops))
 #define DOTNET_PAL_SUPPORT_API_SIZE (offsetof(dotnet_pal_api, support) + sizeof(dotnet_pal_support_ops))
 #define DOTNET_PAL_CONTEXT_API_SIZE (offsetof(dotnet_pal_api, context) + sizeof(dotnet_pal_context_ops))
 #define DOTNET_PAL_WASI_API_SIZE (offsetof(dotnet_pal_api, wasi) + sizeof(dotnet_pal_wasi_ops))
@@ -310,6 +349,7 @@ const dotnet_pal_host_runtime *dotnet_pal_host_runtime_v2(void);
 const dotnet_pal_host_context *dotnet_pal_host_context_v2(void);
 /* Required only by host-support. */
 const dotnet_pal_host_support *dotnet_pal_host_support_v2(void);
+const dotnet_pal_host_images *dotnet_pal_host_images_v2(void);
 #if defined(__cplusplus)
 [[noreturn]] void dotnet_pal_host_abort(void);
 #else
