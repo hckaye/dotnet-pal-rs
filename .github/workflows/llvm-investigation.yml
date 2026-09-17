@@ -27,8 +27,8 @@ jobs:
           node-version: '25.9.0'
       - name: Rust and native prerequisites; linear adapter contract tests
         run: |
-          rustup toolchain install 1.85.1 --profile minimal
-          rustup override set 1.85.1
+          rustup toolchain install 1.98.1 --profile minimal
+          rustup override set 1.98.1
           rustup target add wasm32-wasip1
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build clang llvm lld python3
@@ -47,6 +47,12 @@ jobs:
           export WASI_SDK_PATH="$RUNNER_TEMP/llvm-sdk/wasi-sdk-29.0-x86_64-linux"
           printf 'WASI_SDK_PATH=%s\n' "$WASI_SDK_PATH" >> "$GITHUB_ENV"
           bash scripts/llvm-investigate.sh
+      - name: Build and execute the managed browser application
+        env:
+          NUGET_PACKAGES: ${{ runner.temp }}/llvm-packages
+        run: |
+          bash examples/browser-port/build-app.sh
+          BROWSER_BIN="$(command -v google-chrome)" bash examples/browser-port/run-app.sh
       - name: Rebuild and execute the actual LLVM native runtime without wrapping
         env:
           NUGET_PACKAGES: ${{ runner.temp }}/llvm-packages
@@ -60,5 +66,6 @@ jobs:
             artifacts/llvm/*.json
             artifacts/llvm/*.log
             artifacts/llvm/*/*.wasm
+            examples/browser-port/artifacts/app/*
           if-no-files-found: error
           retention-days: 7

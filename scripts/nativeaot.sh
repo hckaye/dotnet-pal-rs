@@ -14,7 +14,7 @@ clang++ -std=c++17 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -
 python3 integration/dotnet10/symbols.py --props artifacts/wrap.props
 project=samples/GcProbe/GcProbe.csproj
 dotnet restore "$project" -r "$rid"
-cargo build --release
+cargo rustc --lib --crate-type staticlib --release --features linux
 export DOTNET_GCServer=0 DOTNET_gcServer=0 DOTNET_GCLargePages=0
 export COMPlus_gcServer=0 COMPlus_GCLargePages=0
 # RhConfig at the pinned NativeAOT revision accepts hex digits, NOT a 0x prefix.
@@ -24,7 +24,7 @@ DOTNET_GCHeapHardLimit=20000000 timeout 120s ./artifacts/baseline/GcProbe baseli
 rm -rf samples/GcProbe/obj/Release samples/GcProbe/bin/Release
 dotnet publish "$project" -r "$rid" -c Release -p:PalWrap=true -o artifacts/wrapped
 DOTNET_GCHeapHardLimit=20000000 timeout 120s ./artifacts/wrapped/GcProbe wrapped
-cargo build --release --no-default-features --features host --target-dir target/host
+cargo rustc --lib --crate-type staticlib --release --no-default-features --features host --target-dir target/host
 cc -std=c11 -O2 -fPIC -Iinclude -c tests/host_backend.c -o artifacts/host_backend.o
 rm -rf samples/GcProbe/obj/Release samples/GcProbe/bin/Release
 dotnet publish "$project" -r "$rid" -c Release -p:PalWrap=true \

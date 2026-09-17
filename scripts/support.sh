@@ -10,11 +10,11 @@ esac
 run(){ python3 -c 'import subprocess,sys; subprocess.run(sys.argv[1:],check=True,timeout=60)' "$@"; }
 cc_args=(-std=c11 -O2 -Wall -Wextra -Werror -Iinclude)
 if [[ $(uname -s) == Linux ]]; then
-  cargo build --release
+  cargo rustc --lib --crate-type staticlib --release --features linux
   cc "${cc_args[@]}" tests/support.c target/release/libdotnet_pal_rs.a "${gc[@]}" "${libs[@]}" -o artifacts/support/linux
   run artifacts/support/linux
 fi
-cargo build --release --no-default-features --features host-support --target-dir target/host-support
+cargo rustc --lib --crate-type staticlib --release --no-default-features --features host-support --target-dir target/host-support
 lib=target/host-support/release/libdotnet_pal_rs.a
 cc "${cc_args[@]}" tests/support.c native/support_posix.c tests/host_backend.c "$lib" "${gc[@]}" "${libs[@]}" -o artifacts/support/host
 run artifacts/support/host

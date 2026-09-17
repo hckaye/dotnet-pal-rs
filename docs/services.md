@@ -12,6 +12,7 @@ its capability bit before calling a function. A struct size alone is not support
 | `host-services` | Required host callback | Required host callbacks | Host VM |
 | `linear` | Absent | Absent | Bounded linear storage |
 | `wasi-clock` on `wasm32-wasip1` | Actual Preview 1 import | Absent | Bounded linear storage |
+| `examples/browser-port` on wasm32 | `performance.now()` through a JS import | Absent; a page cannot block | Arena, `memory.grow`, or wasi-libc hooks |
 
 `dotnet_pal_get_api(2)` is still the sole runtime-facing entry point. The optional
 `host-services` feature additionally requires `dotnet_pal_host_services_v2()` on

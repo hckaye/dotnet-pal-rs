@@ -57,8 +57,9 @@ class SupportPatchTests(unittest.TestCase):
         self.assertIn('dotnet_pal_context_ops context;\n    dotnet_pal_support_ops support;',text)
         self.assertIn('host-support = ["host"]',(ROOT/'Cargo.toml').read_text())
         text=(ROOT/'src/lib.rs').read_text()
-        self.assertIn('support::CAPABILITIES',text)
-        self.assertIn('!support::available()',text)
+        # The support group is negotiated like every other group of the port.
+        self.assertIn('support::negotiate::<P>()',text)
+        self.assertIn('| support_caps',text)
 
 
 if __name__=='__main__':unittest.main()

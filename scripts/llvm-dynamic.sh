@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 root="$PWD"
 : "${WASI_SDK_PATH:?}"
 [[ -f artifacts/llvm/source-manifest.json && -f artifacts/llvm/source-sdk/libPortableRuntime.a ]]
-cargo build --release --no-default-features --features wasi-dispatch,linear-gc-small,linear-heap \
+cargo rustc --lib --crate-type staticlib --release --no-default-features --features wasi-dispatch,linear-gc-small,linear-heap \
   --target wasm32-wasip1 --target-dir target/wasi-dynamic
 "$WASI_SDK_PATH/bin/clang" --target=wasm32-unknown-wasip1 -std=c11 -O2 -ffunction-sections -fdata-sections \
   -Wall -Wextra -Werror -Iinclude -c native/linear_heap_posix.c -o artifacts/llvm/linear_heap.o

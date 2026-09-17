@@ -1,0 +1,10 @@
+[package]
+name = "dotnet-pal-build"
+version = "0.7.0"
+edition = "2021"
+rust-version = "1.98"
+description = "build.rs helper that assembles the NativeAOT adapter objects and MSBuild link inputs for a dotnet-pal-rs port"
+license = "MIT"
+
+[dependencies]
+cc = "1"

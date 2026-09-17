@@ -19,6 +19,9 @@ The following gates describe what the executable suites actually establish.
 | Linear storage contracts | Separate capability, invalid geometry/exhaustion/reuse/neighbor/concurrency tests |
 | Managed WASIp1 | Audited LLVM compiler, real C# GC/roots/exception workload, observer-only negative/positive controls |
 | WASI source build | Audited native LLVM runtime rebuilt, digest checked, executed without linker wrappers |
+| Library layout | Trait-based ports (`define_pal!`), the std desktop port with its table test on Linux/macOS, the `build.rs` adapter helper |
+| Browser host connection | C-to-Rust boundary with JS-imported clock/wall time/entropy/environment/diagnostics and `memory.grow` storage, executed under Node and headless Chromium |
+| Managed browser execution | C# GC/finalizer/exception/BCL workload linked against the browser port, executed under Node with the page hosts and in headless Chromium; GC storage and clock counted through Rust |
 | Mixed-language ASan | Rust/core and C/C++ boundary code instrumented together with leak checking |
 | Dependency inventory | Actual runtime/PAL unresolved symbols plus executable imports, retaining unknowns and bypasses |
 | Servicing policy | Version/digest guards and documented mandatory re-audit/qualification on upgrades |
@@ -45,11 +48,14 @@ A completed table row is not a claim that every method in its subsystem uses Rus
    exception/unwind metadata, register-context/stack-map adaptation, hardware fault
    behavior and packaging remain target-port obligations. Existing NativeAOT
    implementations are reused on the validated targets, not replaced by Rust.
-4. **Additional Wasm profiles.** The managed test is single-threaded WASIp1 with
-   eager, bounded storage. Shared-memory threads, WASIp2 components, browser APIs,
-   WebAssembly-GC reference objects and dynamically growing managed arenas are
-   not implemented or qualified here. Managed WASI OOM/finalizer qualification
-   does not yet match the wider native suite.
+4. **Additional Wasm profiles.** The managed tests are single-threaded: WASIp1
+   under Node with the published or source-rebuilt runtime, and the browser
+   example with the published runtime only. Shared-memory threads, WASIp2
+   components, WebAssembly-GC reference objects, files, sockets, DOM access and
+   JavaScript interop beyond the five boundary imports are not implemented or
+   qualified. Managed OOM/finalizer qualification in Wasm does not yet match the
+   wider native suite. The desktop `std` port has executed its table test on
+   Linux and macOS only; its Windows providers compile but have not run.
 5. **Product qualification.** A maintained upstream release must be selected and
    re-audited, the actual application's needed BCL surface must be tested, and
    longer deployment-specific stress/performance/security qualification is needed.

@@ -84,7 +84,25 @@ C# allocation/GC root preservation/zeroing/exception tests execute in a real Nod
 WASI host. The positive variant must increment Rust storage/adapter/clock counters;
 the otherwise identical baseline must leave them zero. This is actual managed
 execution, unlike the separate C-to-Rust boundary module tests. It still does not
-establish shared Wasm threads, browser APIs or all BCL functionality.
+establish shared Wasm threads or all BCL functionality.
+
+## Browser host boundary
+
+The browser port (`examples/browser-port`) replaces WASI imports with five
+typed imports from the page's JavaScript: monotonic clock, wall clock, entropy, environment lookup and
+diagnostic output. The Rust front ends stay the same, so the validation that
+protects native callers (cleared outputs on failure, unknown statuses mapped to
+`OS_ERROR`, zero-size requests never entering the host) also applies to a page.
+The reference host bounds-checks every offset against the live memory and
+refuses shared memory. Services a browser cannot provide, above all a blocking
+sleep, are absent rather than emulated.
+
+Its `grow` variant owns its storage: `memory.grow` pages feed the same
+ownership ledger as the C-hook variant, so growth is observable from the page
+and bounded by the engine or a linker memory maximum. Its `heap` variant links
+with the NativeAOT LLVM runtime; the C# program in the example executes in
+headless Chromium with GC storage and the runtime clock crossing the boundary.
+See [wasm](wasm.md) and [porting](porting.md).
 
 ## Residual dependencies and completion
 

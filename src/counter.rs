@@ -5,8 +5,14 @@ pub(crate) struct Counter(AtomicUsize);
 impl Counter {
     pub const fn new() -> Self { Self(AtomicUsize::new(0)) }
     pub fn increment(&self) {
-        let _ = self.0.fetch_update(Ordering::Relaxed, Ordering::Relaxed,
-            |n| Some(n.saturating_add(1)));
+        let mut current = self.0.load(Ordering::Relaxed);
+        loop {
+            let next = current.saturating_add(1);
+            match self.0.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => return,
+                Err(observed) => current = observed,
+            }
+        }
     }
     pub fn load(&self) -> u64 { self.0.load(Ordering::Relaxed) as u64 }
 }

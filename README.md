@@ -1,18 +1,29 @@
 # dotnet-pal-rs
 
-A versioned **Rust `no_std` OS-service boundary for NativeAOT**, with native Linux
-and host-callback backends, plus an explicit linear-storage adaptation for
-experimental NativeAOT LLVM on WebAssembly/WASIp1.
+A **Rust `no_std` OS-service boundary for .NET NativeAOT ports**. The core crate
+declares one trait per OS service the runtime needs, validates every call that
+crosses the C ABI, and ships the pure pieces every port reuses. A platform port
+is a crate that implements the traits it can honestly provide and exports the
+single entry point `dotnet_pal_get_api(2)`. Absent services are reported as
+clear capability bits and NULL callbacks, never as stubs that return success.
 
-The single runtime-facing entry is `dotnet_pal_get_api(2)`. Callers negotiate
-version, table size and capabilities; .NET-version adaptation is kept outside the
-Rust backend. An absent capability is not replaced by a successful no-op.
+| Crate | Content |
+| --- | --- |
+| `dotnet-pal-rs` (this crate) | Traits (`port`), C ABI, front ends, pure storage providers, optional built-in Linux/host/WASI providers |
+| `crates/dotnet-pal-std` | A complete desktop port on the Rust standard library (Linux, macOS; Windows compiles) |
+| `crates/dotnet-pal-build` | `build.rs` helper that compiles the native NativeAOT adapters and writes MSBuild link inputs |
+| `examples/browser-port` | A port whose services are JavaScript imports, and a C# program running in a browser through it |
+
+See [porting](docs/porting.md) for the library workflow. The rest of this file
+describes the qualification of the built-in configurations.
 
 **Implemented and exercised:** native GC memory, clocks, scheduling, events,
 recursive locks, background/finalizer thread creation, termination TLS, stack
 bounds and process-wide memory barriers; managed stress/OOM/fault qualification
-on Linux x64 and ARM64; and actual C# GC/exception execution on WASIp1, including
-a source-rebuilt LLVM native runtime without linker wrapping.
+on Linux x64 and ARM64; actual C# GC/exception execution on WASIp1, including
+a source-rebuilt LLVM native runtime without linker wrapping; the C-to-Rust
+boundary executed inside a real headless browser; and a C# program whose GC
+storage and runtime clock reach a web page through the boundary.
 
 **Not complete:** this is not yet a fully OS-independent NativeAOT runtime or a
 production-supported port. Dependency reports still identify direct runtime OS
@@ -20,6 +31,32 @@ references outside these groups. BCL shims, signal/context handling, module
 inspection and other target-specific services remain. See [readiness](docs/readiness.md)
 for exact completed and uncompleted work. Rust target compilation by itself does
 not establish that NativeAOT can generate or execute code for that target.
+
+## Using the library
+
+```toml
+[dependencies]
+dotnet-pal-rs = { path = "dotnet-pal-rs", default-features = false, features = ["storage-arena"] }
+[build-dependencies]
+dotnet-pal-build = { path = "dotnet-pal-rs/crates/dotnet-pal-build" }
+```
+
+```rust
+#![no_std]
+use dotnet_pal_rs::port::{self, Error, Result};
+struct MyPlatform;
+impl port::Clock for MyPlatform { fn monotonic_ns() -> Result<u64> { Err(Error::Unsupported) } }
+dotnet_pal_rs::define_pal! { Linear = dotnet_pal_rs::storage::Arena, Clock = MyPlatform }
+dotnet_pal_rs::define_panic_handler!(dotnet_pal_rs::port::Trap);
+```
+
+`cargo test -p dotnet-pal-std` runs the desktop port against the negotiated C
+table on the current machine. The built-in standalone configurations below are
+selected with Cargo features and built with an explicit crate type:
+
+```sh
+cargo rustc --lib --crate-type staticlib --release --features linux
+```
 
 ## Start with Wasm and freestanding validation
 
@@ -29,6 +66,8 @@ not establish that NativeAOT can generate or execute code for that target.
 | `wasm32v1-none`, `linear` | Minimal-target Wasm allocation, exhaustion and reuse tests | Not shared-memory Wasm or WasmGC reference objects |
 | `wasm32-wasip1`, `linear` | Same storage tests with no OS imports | Does not exercise WASI services |
 | `wasm32-wasip1`, `wasi-clock` | A real WASIp1 clock import and injected host errors | No scheduler or threads are advertised |
+| `examples/browser-port`, `arena` and `grow` | Same C contract under Node and headless Chromium; five JS imports, injected host failures, real memory growth | Single-threaded, no scheduler |
+| `examples/browser-port`, `heap` + `app/` | C# GC, finalizers, exceptions and BCL console/clock/entropy in headless Chromium; GC storage and clock cross the boundary | Published packs unchanged; no files, sockets or JS interop |
 | Experimental NativeAOT LLVM, WASIp1 | C# allocations, roots, GC, exceptions and clock calls; baseline, wrapped and source-rebuilt variants | Separate audited compiler family; single-threaded, eager storage |
 | `aarch64-unknown-none`, `host` / `host-services` / `host-kernel` | Freestanding Rust archive builds | Final host linkage and device execution are not tested |
 | `riscv64gc-unknown-none-elf`, same host profiles | Freestanding archive builds | Does not supply a .NET code generator or target ABI |
@@ -39,18 +78,21 @@ CI results and logs for the **exact commit** are the evidence. Workflow definiti
 or a successful archive build are not substitutes for runtime execution.
 
 ```sh
-rustup toolchain install 1.85.1 --profile minimal
-rustup override set 1.85.1
+rustup toolchain install 1.98.1 --profile minimal
+rustup override set 1.98.1
 rustup target add wasm32-unknown-unknown wasm32-wasip1 wasm32v1-none
 bash scripts/wasm.sh
 bash scripts/wasi-clock.sh
+bash examples/browser-port/run.sh   # needs a Chromium-based browser; see docs/wasm.md
 
 rustup target add thumbv7em-none-eabi
-cargo build --release --no-default-features --features host-kernel \
+cargo rustc --lib --crate-type staticlib --release --no-default-features --features host-kernel \
   --target thumbv7em-none-eabi
 ```
 
 The boundary Wasm tests require Node.js 22, Clang with Wasm support and `wasm-ld`.
+The browser step additionally needs `google-chrome`, `chromium` or a Playwright
+`chrome-headless-shell` (override with `BROWSER_BIN`).
 Freestanding archives still need host callbacks and target compiler/CRT support at
 final link. They are not complete executables.
 
@@ -63,9 +105,10 @@ NativeAOT GC / runtime-version adapters
           version / size / capabilities
                      |
            Rust no_std common boundary
-              /             \
-  VM / clock / kernel     linear storage / WASIp1 clock
-   Linux or host          native contract tests / Wasm
+          /            |              \
+  VM / clock / kernel  linear storage   linear storage
+   Linux or host       WASIp1 imports   browser JS imports
+                       Node WASI host   page / headless Chromium
 ```
 
 `include/dotnet_pal.h` defines the ABI. Existing prefix offsets are preserved by
@@ -94,7 +137,8 @@ accessible; no physical Wasm page reclamation or `memory.grow` is promised.
 The VM-only adapter rejects a linear-only backend.
 
 See [architecture](docs/architecture.md), [kernel contracts](docs/kernel.md),
-[clock contracts](docs/services.md) and [qualification](docs/qualification.md).
+[clock contracts](docs/services.md), [Wasm and browser profiles](docs/wasm.md)
+and [qualification](docs/qualification.md).
 
 ## Native helper services
 
@@ -109,7 +153,7 @@ bash scripts/support.sh
 
 ## Native contracts and managed qualification
 
-Prerequisites: Rust 1.85.1, C/C++ compiler, Clang, binutils, Python 3 and Linux
+Prerequisites: Rust 1.98.1, C/C++ compiler, Clang, binutils, Python 3 and Linux
 NativeAOT build prerequisites. Managed tests use **.NET SDK 10.0.100**. These are
 reproducibility pins, not recommendations to deploy historical versions.
 
@@ -179,13 +223,39 @@ Compiler/BCL artifacts remain the matching published packages.
 Execution uses Node's real WASIp1 host and rejects non-Preview-1 imports or shared
 memory. The explicit P1 link profile includes a pure error-code-to-text formatter
 needed by the published System.Native archive; it is not a DNS implementation.
-Globalization/timezone are invariant. Browser APIs, networking, components, shared
-threads and a general Wasm platform port are not established by this workload.
+Globalization/timezone are invariant. Networking, components, shared threads and a
+general Wasm platform port are not established by this workload.
+
+## Browser host connection and C# in a browser
+
+`examples/browser-port` builds the boundary for `wasm32-unknown-unknown`,
+`wasm32v1-none` or `wasm32-wasip1` with five typed imports from the
+`dotnet_pal_browser_v1` JavaScript module: monotonic clock, wall clock, entropy,
+environment lookup and diagnostic output. `host/host.mjs` is the reference host
+and runs unchanged in browsers and Node.
+
+```sh
+bash examples/browser-port/run.sh
+docker build -t dotnet-pal-llvm integration/llvm-wasi/container
+docker run --rm -v "$PWD:/work" -w /work -v dotnet-pal-nuget:/nuget dotnet-pal-llvm bash scripts/llvm-investigate.sh
+docker run --rm -v "$PWD:/work" -w /work -v dotnet-pal-nuget:/nuget dotnet-pal-llvm bash examples/browser-port/build-app.sh
+bash examples/browser-port/run-app.sh
+```
+
+The first command executes `tests/browser.c` against the port under Node and
+inside headless Chromium. The container commands compile the C# program in
+`examples/browser-port/app` with the experimental NativeAOT LLVM toolchain
+(whose host pack exists for Linux only), link it against the port and the
+adapters produced by `build.rs`, and run it under Node with the page's WASI
+host. The last command runs the same module in headless Chromium: the program
+asserts that GC storage and the runtime clock crossed the Rust boundary, that
+finalizers, exceptions, entropy and the wall clock work, and that the page never
+had to open a file. See [docs/wasm.md](docs/wasm.md) and the example's README.
 
 ## Memory safety, evidence and limits
 
 ```sh
-rustup toolchain install nightly-2025-03-15 --profile minimal --component rust-src
+rustup toolchain install nightly-2026-09-01 --profile minimal --component rust-src
 bash scripts/sanitize.sh address
 ```
 

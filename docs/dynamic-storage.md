@@ -7,7 +7,9 @@ live-byte budget is preserved (8 MiB by default, 64 MiB with linear-gc-small, or
 256 MiB with linear-gc). The allocator may fail earlier due to its own limits,
 alignment overhead, fragmentation, or the ledger limit.
 
-The embedder supplies the versioned storage allocate/release hooks in dotnet_pal.h.
+The embedder supplies the versioned storage allocate/release hooks in dotnet_pal.h,
+or a port selects `storage::Ledger<storage::Grow>`, which grows wasm32 memory
+itself for modules that contain no other allocator (see [wasm](wasm.md)).
 They must use one allocator, provide exclusive aligned memory, fail before side
 effects, and never reenter PAL or managed code. The reference POSIX backend uses
 posix_memalign/free. In WASIp1 this SHARES wasi-libc's allocator with the native

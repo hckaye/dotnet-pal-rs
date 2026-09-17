@@ -1,0 +1,35 @@
+<!doctype html>
+<!-- Template for page.mjs. The generated page embeds the module,
+     the reference host and the shared probe, then runs them in a real browser.
+     The DOM result is what the headless-browser step checks; nothing is fetched. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>dotnet-pal-rs browser profile</title>
+</head>
+<body>
+<h1>dotnet-pal-rs browser profile</h1>
+<p>Variant: <code>__VARIANT__</code></p>
+<pre id="result">RUNNING</pre>
+<script type="module">
+__HOST_JS__
+__PROBE_JS__
+const bytes = Uint8Array.from(atob('__WASM_BASE64__'), (c) => c.charCodeAt(0));
+const result = document.getElementById('result');
+const errors = [];
+const originalError = console.error;
+console.error = (...args) => { errors.push(args.join(' ')); originalError(...args); };
+try {
+    const summary = await runProbe(bytes, { heap: __HEAP__ });
+    result.textContent = 'BROWSER PASS ' + JSON.stringify({
+        ...summary,
+        userAgent: navigator.userAgent,
+        origin: location.protocol,
+        unexpectedConsoleErrors: errors,
+    });
+} catch (error) {
+    result.textContent = 'BROWSER FAIL ' + (error && error.stack || error);
+}
+</script>
+</body>
+</html>

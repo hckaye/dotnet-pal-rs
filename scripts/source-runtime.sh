@@ -42,7 +42,7 @@ Path("artifacts/source-manifest.json").write_text(json.dumps(manifest, indent=2)
 PYMANIFEST
 clang++ -std=c++17 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
   -DDOTNET_PAL_OBSERVER_ONLY -Iinclude -Inative -c integration/dotnet10/gc_wrap.cpp -o artifacts/gc_observer.o
-cargo build --release --no-default-features --features host-context,host-support --target-dir target/host-kernel
+cargo rustc --lib --crate-type staticlib --release --no-default-features --features host-context,host-support --target-dir target/host-kernel
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/services_host.c -o artifacts/services_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/kernel_host.c -o artifacts/kernel_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/runtime_host.c -o artifacts/runtime_host.o

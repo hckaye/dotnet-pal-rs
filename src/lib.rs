@@ -1,39 +1,54 @@
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
-//! Versioned, allocation-free OS-service boundary; VM and linear memory are distinct.
+//! Versioned, allocation-free OS-service boundary for NativeAOT ports.
+//!
+//! The crate has three layers:
+//!
+//! * [`port`]: the traits a platform implements, one per capability, plus
+//!   [`define_pal!`] which exports `dotnet_pal_get_api` for a port.
+//! * The front ends in this file and the group modules ([`services`], [`kernel`],
+//!   [`runtime`], [`support`], [`context`], [`wasi`]): argument validation,
+//!   output sanitizing and diagnostic counters around any provider.
+//! * Reusable providers that depend on no OS: the bounded [`storage::Arena`],
+//!   the demand [`storage::Ledger`], the Wasm [`storage::Grow`] provider, and the
+//!   raw WASIp1 transport.
+//!
+//! The optional `linux`, `host*`, `linear*` and `wasi*` features assemble a
+//! standalone static library from built-in providers and export the entry point
+//! themselves. A library consumer enables none of them and declares its own port.
 //! Raw-pointer validity, ownership and synchronization remain unsafe caller contracts.
 
-#[cfg(any(all(feature = "linux", feature = "host"), all(feature = "linux", feature = "linear"), all(feature = "host", feature = "linear")))]
-compile_error!("select exactly one backend: linux, host or linear");
-#[cfg(not(any(feature = "linux", feature = "host", feature = "linear")))]
-compile_error!("select a backend: linux, host or linear");
+#[cfg(all(feature = "linux", any(feature = "host", feature = "linear")))]
+compile_error!("select exactly one memory backend: linux, host or linear");
 #[cfg(all(feature = "linux", not(target_os = "linux")))]
-compile_error!("the linux backend supports Linux only; use host or linear");
+compile_error!("the linux backend supports Linux only; use host, linear or a custom port");
 #[cfg(not(target_has_atomic = "ptr"))]
 compile_error!("this implementation requires pointer-width atomics (not 64-bit atomics)");
 #[cfg(all(feature = "wasi-clock", not(all(feature = "linear", target_arch = "wasm32", target_os = "wasi", target_env = "p1"))))]
 compile_error!("wasi-clock requires the linear backend on wasm32-wasip1");
+#[cfg(all(feature = "storage-grow", not(target_arch = "wasm32")))]
+compile_error!("storage-grow is a wasm32 memory.grow provider");
 
-use core::{ffi::c_void, mem, ptr};
+use core::{cell::UnsafeCell, ffi::c_void, mem, ptr, sync::atomic::{AtomicU8, Ordering}};
 mod counter;
 use counter::Counter;
+// Safety contracts of the provider methods are stated once per trait, not per method.
+#[allow(clippy::missing_safety_doc)]
+pub mod port;
 pub mod services;
 pub mod kernel;
 pub mod runtime;
 pub mod wasi;
 pub mod context;
 pub mod support;
+pub mod storage;
 #[cfg(feature = "linux")]
-#[path = "linux.rs"]
-mod backend;
-#[cfg(all(feature = "host", not(feature = "linux")))]
-#[path = "host.rs"]
-mod backend;
-#[cfg(all(feature = "linear", not(feature = "linear-heap")))]
-mod linear;
-#[cfg(feature = "linear-heap")]
-#[path = "linear_heap.rs"]
-mod linear;
+pub mod linux;
+#[cfg(feature = "host")]
+pub mod host;
+#[cfg(any(feature = "wasi-clock", feature = "wasi-runtime", feature = "wasi-dispatch"))]
+pub mod wasi_p1;
+use port::{LinearStorage, Port, VirtualMemory};
 
 pub const ABI_VERSION: u32 = 2;
 pub const OK: u32 = 0;
@@ -79,6 +94,7 @@ pub struct LinearStats {
     pub allocate_ok: u64, pub zero_ok: u64, pub release_ok: u64, pub rejected_or_failed: u64,
 }
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct LinearOps {
     pub granularity: Option<unsafe extern "C" fn() -> usize>,
     pub capacity: Option<unsafe extern "C" fn() -> usize>,
@@ -128,30 +144,29 @@ fn geometry(size: usize, alignment: usize, page: usize) -> Option<(usize, usize)
     Some((size, alignment))
 }
 
-#[cfg(any(feature = "linux", feature = "host"))]
 mod vm {
     use super::*;
-    unsafe extern "C" fn page_size() -> usize { backend::page_size() }
-    unsafe extern "C" fn reserve(size: usize, alignment: usize, flags: u32, out: *mut *mut c_void) -> u32 {
+    pub unsafe extern "C" fn page_size<V: VirtualMemory>() -> usize { V::page_size() }
+    pub unsafe extern "C" fn reserve<V: VirtualMemory>(size: usize, alignment: usize, flags: u32, out: *mut *mut c_void) -> u32 {
         if !aligned_output(out) { return record(INVALID_ARGUMENT, &RESERVE, &FAILED); }
         // SAFETY: valid writable output storage is a caller precondition.
         unsafe { out.write(ptr::null_mut()) };
         if flags != 0 { return record(UNSUPPORTED, &RESERVE, &FAILED); }
-        let Some((size, alignment)) = geometry(size, alignment, backend::page_size()) else {
+        let Some((size, alignment)) = geometry(size, alignment, V::page_size()) else {
             return record(INVALID_ARGUMENT, &RESERVE, &FAILED);
         };
-        // Do not expose an output accidentally written by a failing foreign callback.
-        let mut result: *mut c_void = ptr::null_mut();
-        let mut status = unsafe { backend::reserve(size, alignment, &mut result) };
-        if status == OK {
-            if result.is_null() || (result as usize) % alignment != 0 || (result as usize).checked_add(size).is_none() {
-                status = OS_ERROR; // broken host contract; never dereference such a result
-            } else { unsafe { out.write(result) }; }
-        }
+        let status = match unsafe { V::reserve(size, alignment) } {
+            Ok(result) => {
+                if result.is_null() || (result as usize) % alignment != 0 || (result as usize).checked_add(size).is_none() {
+                    OS_ERROR // broken provider contract; never dereference such a result
+                } else { unsafe { out.write(result) }; OK }
+            }
+            Err(e) => e.status(),
+        };
         record(status, &RESERVE, &FAILED)
     }
-    fn valid_range(address: *mut c_void, size: usize) -> Option<usize> {
-        let page = backend::page_size();
+    fn valid_range<V: VirtualMemory>(address: *mut c_void, size: usize) -> Option<usize> {
+        let page = V::page_size();
         let size = round_size(size, page)?;
         if address.is_null() || (address as usize) & (page - 1) != 0 { return None; }
         (address as usize).checked_add(size)?;
@@ -159,12 +174,12 @@ mod vm {
     }
     macro_rules! range_op {
         ($name:ident, $counter:ident) => {
-            unsafe extern "C" fn $name(address: *mut c_void, size: usize) -> u32 {
-                let Some(size) = valid_range(address, size) else {
+            pub unsafe extern "C" fn $name<V: VirtualMemory>(address: *mut c_void, size: usize) -> u32 {
+                let Some(size) = valid_range::<V>(address, size) else {
                     return record(INVALID_ARGUMENT, &$counter, &FAILED);
                 };
                 // SAFETY: caller owns the range and serializes conflicting operations.
-                record(unsafe { backend::$name(address, size) }, &$counter, &FAILED)
+                record(port::status(unsafe { V::$name(address, size) }), &$counter, &FAILED)
             }
         };
     }
@@ -172,10 +187,14 @@ mod vm {
     range_op!(decommit, DECOMMIT);
     range_op!(release, RELEASE);
     range_op!(reset, RESET);
-    pub const OPS: VmOps = VmOps {
-        page_size: Some(page_size), reserve: Some(reserve), commit: Some(commit),
-        decommit: Some(decommit), release: Some(release), reset: Some(reset),
-    };
+    pub const EMPTY: VmOps = VmOps { page_size: None, reserve: None, commit: None, decommit: None, release: None, reset: None };
+    pub fn ops<V: VirtualMemory>() -> VmOps {
+        if !V::PROVIDED { return EMPTY; }
+        VmOps {
+            page_size: Some(page_size::<V>), reserve: Some(reserve::<V>), commit: Some(commit::<V>),
+            decommit: Some(decommit::<V>), release: Some(release::<V>), reset: Some(reset::<V>),
+        }
+    }
 }
 unsafe extern "C" fn read_stats(out: *mut Stats, size: usize) -> u32 {
     if !aligned_output(out) || size < mem::size_of::<Stats>() { return INVALID_ARGUMENT; }
@@ -186,35 +205,42 @@ unsafe extern "C" fn read_stats(out: *mut Stats, size: usize) -> u32 {
     }) };
     OK
 }
-#[cfg(feature = "linear")]
 mod linear_api {
     use super::*;
     static ALLOCATE: Counter = Counter::new();
     static ZERO: Counter = Counter::new();
     static FREE: Counter = Counter::new();
     static ERRORS: Counter = Counter::new();
-    unsafe extern "C" fn granularity() -> usize { linear::GRANULARITY }
-    unsafe extern "C" fn capacity() -> usize { linear::CAPACITY }
-    unsafe extern "C" fn allocate(size: usize, alignment: usize, flags: u32, out: *mut *mut c_void) -> u32 {
+    unsafe extern "C" fn granularity<L: LinearStorage>() -> usize { L::GRANULARITY }
+    unsafe extern "C" fn capacity<L: LinearStorage>() -> usize { L::CAPACITY }
+    unsafe extern "C" fn allocate<L: LinearStorage>(size: usize, alignment: usize, flags: u32, out: *mut *mut c_void) -> u32 {
         if !aligned_output(out) { return record(INVALID_ARGUMENT, &ALLOCATE, &ERRORS); }
         unsafe { out.write(ptr::null_mut()) };
         if flags != 0 { return record(UNSUPPORTED, &ALLOCATE, &ERRORS); }
-        let Some((size, alignment)) = geometry(size, alignment, linear::GRANULARITY) else {
+        let Some((size, alignment)) = geometry(size, alignment, L::GRANULARITY) else {
             return record(INVALID_ARGUMENT, &ALLOCATE, &ERRORS);
         };
-        record(unsafe { linear::allocate(size, alignment, out) }, &ALLOCATE, &ERRORS)
+        let status = match unsafe { L::allocate(size, alignment) } {
+            Ok(address) => {
+                if address.is_null() || (address as usize) % alignment != 0 || (address as usize).checked_add(size).is_none() { OS_ERROR }
+                else { unsafe { out.write(address) }; OK }
+            }
+            Err(e) => e.status(),
+        };
+        record(status, &ALLOCATE, &ERRORS)
     }
-    unsafe extern "C" fn zero(address: *mut c_void, size: usize) -> u32 {
+    unsafe extern "C" fn zero<L: LinearStorage>(address: *mut c_void, size: usize) -> u32 {
         if address.is_null() || size == 0 || (address as usize).checked_add(size).is_none() {
             return record(INVALID_ARGUMENT, &ZERO, &ERRORS);
         }
-        record(unsafe { linear::zero(address, size) }, &ZERO, &ERRORS)
+        record(port::status(unsafe { L::zero(address, size) }), &ZERO, &ERRORS)
     }
-    unsafe extern "C" fn release(address: *mut c_void, size: usize) -> u32 {
-        let Some(size) = round_size(size, linear::GRANULARITY) else {
+    unsafe extern "C" fn release<L: LinearStorage>(address: *mut c_void, size: usize) -> u32 {
+        let Some(size) = round_size(size, L::GRANULARITY) else {
             return record(INVALID_ARGUMENT, &FREE, &ERRORS);
         };
-        record(unsafe { linear::release(address, size) }, &FREE, &ERRORS)
+        if address.is_null() { return record(INVALID_ARGUMENT, &FREE, &ERRORS); }
+        record(port::status(unsafe { L::release(address, size) }), &FREE, &ERRORS)
     }
     unsafe extern "C" fn stats(out: *mut LinearStats, size: usize) -> u32 {
         if !aligned_output(out) || size < mem::size_of::<LinearStats>() { return INVALID_ARGUMENT; }
@@ -224,60 +250,88 @@ mod linear_api {
         }) };
         OK
     }
-    pub const OPS: LinearOps = LinearOps {
-        granularity: Some(granularity), capacity: Some(capacity), allocate: Some(allocate),
-        zero: Some(zero), release: Some(release), read_stats: Some(stats),
-    };
+    pub const EMPTY: LinearOps = LinearOps { granularity: None, capacity: None, allocate: None, zero: None, release: None, read_stats: None };
+    pub fn ops<L: LinearStorage>() -> LinearOps {
+        if !L::PROVIDED { return EMPTY; }
+        LinearOps {
+            granularity: Some(granularity::<L>), capacity: Some(capacity::<L>), allocate: Some(allocate::<L>),
+            zero: Some(zero::<L>), release: Some(release::<L>), read_stats: Some(stats),
+        }
+    }
 }
-const API_BASE: Api = Api {
-    header: Header {
-        abi_version: ABI_VERSION, struct_size: mem::size_of::<Api>() as u32,
-        capabilities: (if cfg!(feature = "linear") { CAP_LINEAR } else { CAP_VM }) | services::CAPABILITIES | kernel::CAPABILITIES | runtime::CAPABILITIES | wasi::CAPABILITIES | context::CAPABILITIES | support::CAPABILITIES | if cfg!(feature="linear-heap") { CAP_DYNAMIC_LINEAR } else { 0 },
-    },
-    #[cfg(not(feature = "linear"))]
-    vm: vm::OPS,
-    #[cfg(feature = "linear")]
-    vm: VmOps { page_size: None, reserve: None, commit: None, decommit: None, release: None, reset: None },
-    read_stats: Some(read_stats),
-    #[cfg(feature = "linear")]
-    linear: linear_api::OPS,
-    #[cfg(not(feature = "linear"))]
-    linear: LinearOps { granularity: None, capacity: None, allocate: None, zero: None, release: None, read_stats: None },
-    services: services::OPS,
-    kernel: kernel::OPS,
-    runtime: runtime::OPS,
-    wasi: wasi::OPS,
-    context: context::OPS,
-    support: support::OPS,
-};
-static API: Api = API_BASE;
-#[cfg(feature = "linux")]
-static API_NO_BARRIER: Api = Api {
-    header: Header {
-        abi_version: ABI_VERSION, struct_size: mem::size_of::<Api>() as u32,
-        capabilities: API_BASE.header.capabilities & !kernel::CAP_BARRIER,
-    },
-    kernel: kernel::OPS_NO_BARRIER,
-    ..API_BASE
-};
-/// The only runtime-facing PAL entry point. Valid before managed runtime startup.
-#[no_mangle]
-pub extern "C" fn dotnet_pal_get_api(version: u32) -> *const Api {
-    if version != ABI_VERSION || !services::available() || !kernel::available() || !runtime::available() || !context::available() || !support::available() { return ptr::null(); }
-    #[cfg(not(feature = "linear"))]
-    if !backend::page_size().is_power_of_two() { return ptr::null(); }
-    #[cfg(feature = "linux")]
-    if !kernel::has_barrier() { return &API_NO_BARRIER; }
-    &API
+
+/// Builds the immutable table for a port, or `None` when the port rejects negotiation.
+pub fn build<P: Port>() -> Option<Api> {
+    // VM and linear storage are different contracts; a port advertises one of them.
+    if P::VirtualMemory::PROVIDED && P::Linear::PROVIDED { return None; }
+    if !P::validate() { return None; }
+    if P::VirtualMemory::PROVIDED && !P::VirtualMemory::page_size().is_power_of_two() { return None; }
+    if P::Linear::PROVIDED && (!P::Linear::GRANULARITY.is_power_of_two() || P::Linear::CAPACITY == 0) { return None; }
+    let mut capabilities = 0;
+    if P::VirtualMemory::PROVIDED { capabilities |= CAP_VM; }
+    if P::Linear::PROVIDED { capabilities |= CAP_LINEAR; }
+    if P::Linear::PROVIDED && P::Linear::DYNAMIC { capabilities |= CAP_DYNAMIC_LINEAR; }
+    let (services_caps, services_ops) = services::negotiate::<P>();
+    let (kernel_caps, kernel_ops) = kernel::negotiate::<P>();
+    let (runtime_caps, runtime_ops) = runtime::negotiate::<P>();
+    let (wasi_caps, wasi_ops) = wasi::negotiate::<P>();
+    let (context_caps, context_ops) = context::negotiate::<P>()?;
+    let (support_caps, support_ops) = support::negotiate::<P>();
+    capabilities |= services_caps | kernel_caps | runtime_caps | wasi_caps | context_caps | support_caps;
+    Some(Api {
+        header: Header { abi_version: ABI_VERSION, struct_size: mem::size_of::<Api>() as u32, capabilities },
+        vm: vm::ops::<P::VirtualMemory>(),
+        read_stats: Some(read_stats),
+        linear: linear_api::ops::<P::Linear>(),
+        services: services_ops,
+        kernel: kernel_ops,
+        runtime: runtime_ops,
+        wasi: wasi_ops,
+        context: context_ops,
+        support: support_ops,
+    })
 }
-#[cfg(not(test))]
-#[panic_handler]
-fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
-    #[cfg(feature = "linear")]
-    unsafe { linear::abort() }
-    #[cfg(not(feature = "linear"))]
-    unsafe { backend::abort() }
+
+/// Storage for one negotiated table. Written once, then immutable for the
+/// process or instance lifetime, so callers may keep the returned pointer.
+pub struct Slot { api: UnsafeCell<mem::MaybeUninit<Api>>, state: AtomicU8 }
+// SAFETY: the table is written only by the thread that wins the 0 -> 1 transition
+// and read only after the state reaches 2; a rejected negotiation never publishes.
+unsafe impl Sync for Slot {}
+const UNINITIALIZED: u8 = 0;
+const NEGOTIATING: u8 = 1;
+const READY: u8 = 2;
+const REJECTED: u8 = 3;
+impl Slot {
+    pub const fn new() -> Self { Self { api: UnsafeCell::new(mem::MaybeUninit::uninit()), state: AtomicU8::new(UNINITIALIZED) } }
 }
+impl Default for Slot { fn default() -> Self { Self::new() } }
+/// Negotiates (once) and returns the table for `P`, or NULL.
+///
+/// A rejected negotiation is final: the runtime must not retry with different
+/// host configuration after startup. Concurrent first callers wait for the winner.
+pub fn negotiate<P: Port>(slot: &'static Slot, version: u32) -> *const Api {
+    if version != ABI_VERSION { return ptr::null(); }
+    loop {
+        match slot.state.load(Ordering::Acquire) {
+            READY => return slot.api.get().cast::<Api>(),
+            REJECTED => return ptr::null(),
+            NEGOTIATING => core::hint::spin_loop(),
+            _ => {
+                if slot.state.compare_exchange(UNINITIALIZED, NEGOTIATING, Ordering::AcqRel, Ordering::Acquire).is_err() { continue; }
+                let outcome = match build::<P>() {
+                    Some(api) => { unsafe { (*slot.api.get()).write(api) }; READY }
+                    None => REJECTED,
+                };
+                slot.state.store(outcome, Ordering::Release);
+            }
+        }
+    }
+}
+
+#[cfg(any(feature = "linux", feature = "host", feature = "linear"))]
+mod standalone;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,5 +352,50 @@ mod tests {
         assert_eq!(geometry(1, 1usize << (usize::BITS - 1), 4096), None);
     }
     #[test]
-    fn negotiation_rejects_unknown_version() { assert!(dotnet_pal_get_api(99).is_null()); }
+    fn capability_bits_never_alias() {
+        let bits = [CAP_VM, CAP_LINEAR, CAP_DYNAMIC_LINEAR, services::CAP_CLOCK, services::CAP_SCHEDULER,
+            kernel::ALL, runtime::ALL, wasi::CAP, context::CAP, support::ALL];
+        for (i, a) in bits.iter().enumerate() {
+            assert_ne!(*a, 0);
+            for b in &bits[i + 1..] { assert_eq!(a & b, 0, "capability groups overlap"); }
+        }
+    }
+    declare_port! { struct Empty; }
+    static EMPTY_SLOT: Slot = Slot::new();
+    #[test]
+    fn an_empty_port_negotiates_with_no_capabilities() {
+        assert!(negotiate::<Empty>(&EMPTY_SLOT, 99).is_null());
+        let api = negotiate::<Empty>(&EMPTY_SLOT, ABI_VERSION);
+        assert!(!api.is_null());
+        let api = unsafe { &*api };
+        assert_eq!(api.header.capabilities, 0);
+        assert!(api.vm.reserve.is_none() && api.linear.allocate.is_none() && api.services.monotonic_ns.is_none());
+        assert!(api.kernel.event_create.is_none() && api.runtime.random_bytes.is_none() && api.support.write_stderr.is_none());
+        assert!(core::ptr::eq(api, negotiate::<Empty>(&EMPTY_SLOT, ABI_VERSION)));
+    }
+    struct Rejecting;
+    declare_port! { struct RejectingPort; Clock = Rejecting }
+    impl port::Clock for Rejecting { fn monotonic_ns() -> port::Result<u64> { Ok(1) } }
+    impl port::Port for Rejecting {
+        type VirtualMemory = port::Absent; type Linear = port::Absent; type Clock = Rejecting; type Scheduler = port::Absent;
+        type Events = port::Absent; type Mutexes = port::Absent; type Threads = port::Absent; type ThreadLocal = port::Absent;
+        type StackBounds = port::Absent; type ProcessBarrier = port::Absent; type Environment = port::Absent; type Identity = port::Absent;
+        type Realtime = port::Absent; type Entropy = port::Absent; type NativeMapping = port::Absent; type Modules = port::Absent;
+        type NativeHeap = port::Absent; type RwLocks = port::Absent; type ThreadName = port::Absent; type Diagnostics = port::Absent;
+        type Context = port::Absent; type Wasi = port::Absent; type Abort = port::Trap;
+        fn validate() -> bool { false }
+    }
+    static REJECT_SLOT: Slot = Slot::new();
+    static CLOCK_SLOT: Slot = Slot::new();
+    #[test]
+    fn validation_failure_is_final_and_clock_only_ports_work() {
+        assert!(negotiate::<Rejecting>(&REJECT_SLOT, ABI_VERSION).is_null());
+        assert!(negotiate::<Rejecting>(&REJECT_SLOT, ABI_VERSION).is_null());
+        let api = unsafe { &*negotiate::<RejectingPort>(&CLOCK_SLOT, ABI_VERSION) };
+        assert_eq!(api.header.capabilities, services::CAP_CLOCK);
+        let mut value = 0;
+        assert_eq!(unsafe { api.services.monotonic_ns.unwrap()(&mut value) }, OK);
+        assert_eq!(value, 1);
+        assert!(api.services.sleep_ns.is_none());
+    }
 }

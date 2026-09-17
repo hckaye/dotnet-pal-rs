@@ -5,10 +5,16 @@
   "sdk_sha256": "87d1d1a2879d139cdc624b968efad3d4a97b8078cdff95e63ac88ecafd1a0171",
   "packages_sha512": {
     "microsoft.dotnet.ilcompiler.llvm": "XrIZBfXRkiJX15BQUuMKui65GzhFtS/xfTvt0ueWup0kPvwIma4xXyS9aJJkcqsBrU8vHttcNREOx1rdg/WCKw==",
-    "runtime.linux-x64.microsoft.dotnet.ilcompiler.llvm": "t1iJrnQA/65PemG1ZAHtvdGhtdpXe1gtUlPX/dqmbrE4uwIWJAKxvHba59ct2mC0HEaGxWb67PkIk68CMgX4Qg==",
     "runtime.wasi-wasm.microsoft.dotnet.ilcompiler.llvm": "908lXR2VeEZs07PzrZcfBkTFmfeslYen6j/6fKn5pgctxX5XwlTyR7Hm5t+t+DOfyK8wXY4vy/DrkZZIc+OV4Q=="
   },
   "node_version": "25.9.0",
   "module_maximum_bytes": 134217728,
-  "qualification_arena_bytes": 67108864
+  "qualification_arena_bytes": 67108864,
+  "host_packages_sha512": {
+    "linux-x64": "t1iJrnQA/65PemG1ZAHtvdGhtdpXe1gtUlPX/dqmbrE4uwIWJAKxvHba59ct2mC0HEaGxWb67PkIk68CMgX4Qg==",
+    "linux-arm64": "OWJsn162erm79BAfnAtDS2Be+kzqzlNvlHaSuQLx9GZt5kypsWDa6M7L2Dtf9DOokLY9ssmM5EEgiRkh8PFn8Q=="
+  },
+  "sdk_archives_sha256": {
+    "x86_64-linux": "87d1d1a2879d139cdc624b968efad3d4a97b8078cdff95e63ac88ecafd1a0171"
+  }
 }

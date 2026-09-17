@@ -1,0 +1,27 @@
+[package]
+name = "browser-port"
+version = "0.7.0"
+edition = "2021"
+rust-version = "1.98"
+publish = false
+description = "Example port of the dotnet-pal-rs boundary to a web page: OS services are JavaScript imports"
+license = "MIT"
+
+[lib]
+crate-type = ["staticlib"]
+
+[features]
+# The bounded static arena (part of the initial memory).
+default = ["arena"]
+arena = ["dotnet-pal-rs/storage-arena"]
+# Demand storage from memory.grow; only for modules with no other allocator.
+grow = ["dotnet-pal-rs/storage-grow"]
+# Demand storage through the C-heap hooks (posix_memalign): the variant linked
+# with the NativeAOT LLVM runtime and wasi-libc. 64 MiB budget for the GC probe.
+heap = ["dotnet-pal-rs/storage-hooks", "dotnet-pal-rs/linear-gc-small"]
+
+[dependencies]
+dotnet-pal-rs = { path = "../..", default-features = false }
+
+[build-dependencies]
+dotnet-pal-build = { path = "../../crates/dotnet-pal-build" }

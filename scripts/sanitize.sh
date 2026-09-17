@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 [[ $# == 1 && ( "$1" == address || "$1" == thread ) ]] || { echo 'usage: sanitize.sh address|thread' >&2; exit 2; }
 sanitizer=$1
 triple=x86_64-unknown-linux-gnu
-rust=nightly-2025-03-15
+rust=nightly-2026-09-01
 out="$PWD/artifacts/$sanitizer"
 mkdir -p "$out"
 ulimit -c 0
@@ -15,7 +15,7 @@ export TSAN_OPTIONS=halt_on_error=1:exitcode=66:handle_segv=0:handle_sigbus=0
 export RUSTFLAGS="-Zsanitizer=$sanitizer -Zexternal-clangrt -Cdebuginfo=1 -Cforce-frame-pointers=yes"
 common=(-O1 -g -fno-omit-frame-pointer -fsanitize="$sanitizer" -Wall -Wextra -Werror -Iinclude -Inative)
 for backend in linux host-runtime host-support linear linear-heap; do
-  cargo "+$rust" build -Zbuild-std=core,compiler_builtins --release --no-default-features \
+  cargo "+$rust" rustc -Zbuild-std=core,compiler_builtins --lib --crate-type staticlib --release --no-default-features \
     --features "$backend" --target "$triple" --target-dir "target/$sanitizer-$backend"
   lib="target/$sanitizer-$backend/$triple/release/libdotnet_pal_rs.a"
   if [[ "$backend" == host-support ]]; then

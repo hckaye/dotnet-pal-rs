@@ -9,7 +9,7 @@ exec > >(tee artifacts/llvm/driver.log) 2>&1
 : "${NUGET_PACKAGES:?provide an isolated package cache}"
 export MSBuildEnableWorkloadResolver=false
 project=samples/LlvmGcProbe/LlvmGcProbe.csproj
-cargo build --release --no-default-features --features linear-gc-small,wasi-runtime --target wasm32-wasip1
+cargo rustc --lib --crate-type staticlib --release --no-default-features --features linear-gc-small,wasi-runtime --target wasm32-wasip1
 cc="$WASI_SDK_PATH/bin/clang"; cxx="$WASI_SDK_PATH/bin/clang++"
 # This PURE formatter must use the P2 SDK's error constants, matching the published
 # System.Native archive. It performs no OS calls or P2 imports. The P1 SDK has no

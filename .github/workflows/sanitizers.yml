@@ -19,7 +19,7 @@ jobs:
           persist-credentials: false
       - name: Install the pinned instrumentation toolchain
         run: |
-          rustup toolchain install nightly-2025-03-15 --profile minimal --component rust-src
+          rustup toolchain install nightly-2026-09-01 --profile minimal --component rust-src
           sudo apt-get update
           sudo apt-get install -y clang llvm lld
       - name: Instrument Rust, core and C/C++ callers together

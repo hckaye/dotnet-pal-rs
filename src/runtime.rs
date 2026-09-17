@@ -1,6 +1,6 @@
 //! Runtime OS services, separately negotiated from VM and synchronization.
-//! All pointers are trusted FFI borrows, not sandboxed addresses. Host tables are
-//! immutable for the process lifetime and must be available before managed startup.
+//! All pointers are trusted FFI borrows, not sandboxed addresses.
+use crate::port::{self, Entropy, Environment, Identity, Lookup, Modules, NativeMapping, Port, Realtime};
 use crate::{aligned_output, Counter, Header, INVALID_ARGUMENT, OK, OS_ERROR, OUT_OF_MEMORY, UNSUPPORTED};
 use core::{ffi::c_void, mem, ptr};
 
@@ -16,8 +16,6 @@ pub const READ: u32 = 1;
 pub const WRITE: u32 = 2;
 pub const EXECUTE: u32 = 4;
 pub const ALL: u64 = CAP_ENVIRONMENT | CAP_IDENTITY | CAP_REALTIME | CAP_ENTROPY | CAP_NATIVE_MEMORY | CAP_MODULES;
-pub const CAPABILITIES: u64 = if cfg!(any(feature="linux", feature="host-runtime")) { ALL }
-    else if cfg!(feature="wasi-runtime") { CAP_ENVIRONMENT | CAP_REALTIME | CAP_ENTROPY } else { 0 };
 pub const MAX_NAME: usize = 4095;
 
 #[repr(C)]
@@ -55,21 +53,7 @@ pub struct Stats {
     pub module_info_ok: u64, pub rejected_or_failed: u64,
 }
 static COUNTERS: [Counter; 12] = [const { Counter::new() }; 12];
-#[cfg(feature="linux")]
-#[path="runtime_linux.rs"]
-mod platform;
-#[cfg(feature="host-runtime")]
-#[path="runtime_host.rs"]
-mod platform;
-#[cfg(feature="wasi-runtime")]
-#[path="runtime_wasi.rs"]
-mod platform;
-#[cfg(not(any(feature="linux", feature="host-runtime", feature="wasi-runtime")))]
-mod platform { use super::*; pub fn ops() -> Option<&'static Ops> { None } }
 
-pub fn available() -> bool {
-    CAPABILITIES == 0 || platform::ops().is_some()
-}
 fn record(status: u32, index: usize) -> u32 {
     let status = match status {
         OK | UNSUPPORTED | INVALID_ARGUMENT | OS_ERROR | OUT_OF_MEMORY => status,
@@ -80,129 +64,128 @@ fn record(status: u32, index: usize) -> u32 {
     COUNTERS[if status == OK { index } else { 11 }].increment();
     status
 }
-unsafe fn valid_name(name: *const u8, length: usize, environment: bool) -> bool {
-    if name.is_null() || length == 0 || length > MAX_NAME || (name as usize).checked_add(length).is_none() { return false; }
+unsafe fn valid_name<'a>(name: *const u8, length: usize, environment: bool) -> Option<&'a [u8]> {
+    if name.is_null() || length == 0 || length > MAX_NAME || (name as usize).checked_add(length).is_none() { return None; }
     // SAFETY: caller guarantees a readable borrow for length bytes.
     let bytes = unsafe { core::slice::from_raw_parts(name, length) };
-    !bytes.contains(&0) && (!environment || !bytes.contains(&b'='))
+    (!bytes.contains(&0) && (!environment || !bytes.contains(&b'='))).then_some(bytes)
 }
 fn valid_buffer<T>(p: *mut T, count: usize) -> bool {
     if count > isize::MAX as usize / mem::size_of::<T>().max(1) { return false; }
     count == 0 || (aligned_output(p) && (p as usize).checked_add(count * mem::size_of::<T>()).is_some())
 }
-unsafe extern "C" fn environment_get(name: *const u8, len: usize, out: *mut u8, capacity: usize, required: *mut usize) -> u32 {
+unsafe extern "C" fn environment_get<E: Environment>(name: *const u8, len: usize, out: *mut u8, capacity: usize, required: *mut usize) -> u32 {
     if !aligned_output(required) || !valid_buffer(out, capacity) { return record(INVALID_ARGUMENT, 0); }
     unsafe { required.write(0); if capacity != 0 { out.write(0); } }
-    if !unsafe { valid_name(name, len, true) } { return record(INVALID_ARGUMENT, 0); }
-    let Some(call) = platform::ops().and_then(|o| o.environment_get) else { return record(UNSUPPORTED, 0); };
-    let mut needed = 0;
-    let mut status = unsafe { call(name, len, out, capacity, &mut needed) };
-    if status == OK {
-        if needed == 0 || needed > capacity || needed > isize::MAX as usize { status = OS_ERROR; }
-        else if unsafe { out.add(needed - 1).read() } != 0 { status = OS_ERROR; }
-    } else if status == BUFFER_TOO_SMALL {
-        if needed == 0 || needed <= capacity || needed > isize::MAX as usize { status = OS_ERROR; }
-    }
-    if status == OK || status == BUFFER_TOO_SMALL { unsafe { required.write(needed) }; }
+    let Some(name) = (unsafe { valid_name(name, len, true) }) else { return record(INVALID_ARGUMENT, 0); };
+    let status = match unsafe { E::get(name, out, capacity) } {
+        Ok(Lookup::Copied(needed)) => {
+            // A provider reporting more than the capacity, or no terminator, broke the contract.
+            if needed == 0 || needed > capacity || needed > isize::MAX as usize || unsafe { out.add(needed - 1).read() } != 0 { OS_ERROR }
+            else { unsafe { required.write(needed) }; OK }
+        }
+        Ok(Lookup::TooSmall(needed)) => {
+            if needed == 0 || needed <= capacity || needed > isize::MAX as usize { OS_ERROR }
+            else { unsafe { required.write(needed) }; BUFFER_TOO_SMALL }
+        }
+        Err(e) => e.status(),
+    };
     if status != OK && capacity != 0 { unsafe { out.write(0) }; }
     record(status, 0)
 }
-macro_rules! scalar {
-    ($name:ident, $index:expr, $nonzero:expr) => {
-        unsafe extern "C" fn $name(out: *mut u64) -> u32 {
-            if !aligned_output(out) { return record(INVALID_ARGUMENT, $index); }
-            unsafe { out.write(0) };
-            let Some(call) = platform::ops().and_then(|o| o.$name) else { return record(UNSUPPORTED, $index); };
-            let mut value = 0;
-            let mut status = unsafe { call(&mut value) };
-            if status == OK && $nonzero && value == 0 { status = OS_ERROR; }
-            if status == OK { unsafe { out.write(value) }; }
-            record(status, $index)
-        }
-    };
+unsafe fn scalar(out: *mut u64, index: usize, nonzero: bool, value: port::Result<u64>) -> u32 {
+    if !aligned_output(out) { return record(INVALID_ARGUMENT, index); }
+    unsafe { out.write(0) };
+    match value {
+        Ok(0) if nonzero => record(OS_ERROR, index),
+        Ok(value) => { unsafe { out.write(value) }; record(OK, index) }
+        Err(e) => record(e.status(), index),
+    }
 }
-scalar!(process_id, 1, true);
-scalar!(thread_id, 1, true);
-scalar!(realtime_ns, 2, false);
-unsafe extern "C" fn random_bytes(out: *mut u8, size: usize) -> u32 {
+unsafe extern "C" fn process_id<I: Identity>(out: *mut u64) -> u32 {
+    if !aligned_output(out) { return record(INVALID_ARGUMENT, 1); }
+    unsafe { scalar(out, 1, true, I::process_id()) }
+}
+unsafe extern "C" fn thread_id<I: Identity>(out: *mut u64) -> u32 {
+    if !aligned_output(out) { return record(INVALID_ARGUMENT, 1); }
+    unsafe { scalar(out, 1, true, I::thread_id()) }
+}
+unsafe extern "C" fn realtime_ns<R: Realtime>(out: *mut u64) -> u32 {
+    if !aligned_output(out) { return record(INVALID_ARGUMENT, 2); }
+    unsafe { scalar(out, 2, false, R::realtime_ns()) }
+}
+unsafe extern "C" fn random_bytes<E: Entropy>(out: *mut u8, size: usize) -> u32 {
     if !valid_buffer(out, size) { return record(INVALID_ARGUMENT, 3); }
-    let Some(call) = platform::ops().and_then(|o| o.random_bytes) else { return record(UNSUPPORTED, 3); };
-    let status = if size == 0 { OK } else { unsafe { call(out, size) } };
+    let status = if size == 0 { OK } else { port::status(unsafe { E::fill(out, size) }) };
     // Never return partially generated bytes on error. The caller must check status.
     if status != OK && size != 0 { unsafe { ptr::write_bytes(out, 0, size) }; }
     record(status, 3)
 }
-fn page_size() -> usize {
-    #[cfg(any(feature="linux", feature="host"))]
-    return crate::backend::page_size();
-    #[cfg(not(any(feature="linux", feature="host")))]
-    0
-}
-unsafe extern "C" fn mapping_allocate(size: usize, protection: u32, out: *mut *mut c_void) -> u32 {
+unsafe extern "C" fn mapping_allocate<M: NativeMapping>(size: usize, protection: u32, out: *mut *mut c_void) -> u32 {
     if !aligned_output(out) { return record(INVALID_ARGUMENT, 4); }
     unsafe { out.write(ptr::null_mut()) };
     if size == 0 || size > isize::MAX as usize || protection & !7 != 0 { return record(INVALID_ARGUMENT, 4); }
-    let Some(call) = platform::ops().and_then(|o| o.mapping_allocate) else { return record(UNSUPPORTED, 4); };
-    let mut value = ptr::null_mut();
-    let mut status = unsafe { call(size, protection, &mut value) };
-    if status == OK {
-        if value.is_null() || !page_size().is_power_of_two() || value as usize % page_size() != 0 || (value as usize).checked_add(size).is_none() { status = OS_ERROR; }
-        else { unsafe { out.write(value) }; }
-    }
+    let status = match unsafe { M::allocate(size, protection) } {
+        Ok(value) => {
+            let page = M::page_size();
+            if value.is_null() || !page.is_power_of_two() || value as usize % page != 0 || (value as usize).checked_add(size).is_none() { OS_ERROR }
+            else { unsafe { out.write(value) }; OK }
+        }
+        Err(e) => e.status(),
+    };
     record(status, 4)
 }
-unsafe extern "C" fn mapping_release(address: *mut c_void, size: usize) -> u32 {
+unsafe extern "C" fn mapping_release<M: NativeMapping>(address: *mut c_void, size: usize) -> u32 {
     if address.is_null() || size == 0 || !valid_buffer(address.cast::<u8>(), size) { return record(INVALID_ARGUMENT, 5); }
-    let Some(call) = platform::ops().and_then(|o| o.mapping_release) else { return record(UNSUPPORTED, 5); };
-    record(unsafe { call(address, size) }, 5)
+    record(port::status(unsafe { M::release(address, size) }), 5)
 }
-unsafe extern "C" fn mapping_protect(address: *mut c_void, size: usize, protection: u32) -> u32 {
+unsafe extern "C" fn mapping_protect<M: NativeMapping>(address: *mut c_void, size: usize, protection: u32) -> u32 {
     if address.is_null() || size == 0 || !valid_buffer(address.cast::<u8>(), size) || protection & !7 != 0 { return record(INVALID_ARGUMENT, 6); }
-    let Some(call) = platform::ops().and_then(|o| o.mapping_protect) else { return record(UNSUPPORTED, 6); };
-    record(unsafe { call(address, size, protection) }, 6)
+    record(port::status(unsafe { M::protect(address, size, protection) }), 6)
 }
-unsafe extern "C" fn module_open(name: *const u8, len: usize, out: *mut *mut c_void) -> u32 {
+unsafe extern "C" fn module_open<M: Modules>(name: *const u8, len: usize, out: *mut *mut c_void) -> u32 {
     if !aligned_output(out) { return record(INVALID_ARGUMENT, 7); }
     unsafe { out.write(ptr::null_mut()) };
     // NULL with length zero explicitly denotes the current process.
-    if !(name.is_null() && len == 0) && !unsafe { valid_name(name, len, false) } { return record(INVALID_ARGUMENT, 7); }
-    let Some(call) = platform::ops().and_then(|o| o.module_open) else { return record(UNSUPPORTED, 7); };
-    let mut handle = ptr::null_mut();
-    let mut status = unsafe { call(name, len, &mut handle) };
-    if status == OK {
-        if handle.is_null() { status = OS_ERROR; } else { unsafe { out.write(handle) }; }
-    }
+    let name = if name.is_null() && len == 0 { None } else {
+        match unsafe { valid_name(name, len, false) } { Some(n) => Some(n), None => return record(INVALID_ARGUMENT, 7) }
+    };
+    let status = match unsafe { M::open(name) } {
+        Ok(handle) if handle.is_null() => OS_ERROR,
+        Ok(handle) => { unsafe { out.write(handle) }; OK }
+        Err(e) => e.status(),
+    };
     record(status, 7)
 }
-unsafe extern "C" fn module_symbol(handle: *mut c_void, name: *const u8, len: usize, out: *mut *mut c_void) -> u32 {
+unsafe extern "C" fn module_symbol<M: Modules>(handle: *mut c_void, name: *const u8, len: usize, out: *mut *mut c_void) -> u32 {
     if !aligned_output(out) { return record(INVALID_ARGUMENT, 8); }
     unsafe { out.write(ptr::null_mut()) };
-    if handle.is_null() || !unsafe { valid_name(name, len, false) } { return record(INVALID_ARGUMENT, 8); }
-    let Some(call) = platform::ops().and_then(|o| o.module_symbol) else { return record(UNSUPPORTED, 8); };
-    let mut value = ptr::null_mut();
-    let status = unsafe { call(handle, name, len, &mut value) };
+    if handle.is_null() { return record(INVALID_ARGUMENT, 8); }
+    let Some(name) = (unsafe { valid_name(name, len, false) }) else { return record(INVALID_ARGUMENT, 8); };
     // A symbol may legitimately have address zero; the status disambiguates it.
-    if status == OK { unsafe { out.write(value) }; }
+    let status = match unsafe { M::symbol(handle, name) } {
+        Ok(value) => { unsafe { out.write(value) }; OK }
+        Err(e) => e.status(),
+    };
     record(status, 8)
 }
-unsafe extern "C" fn module_close(handle: *mut c_void) -> u32 {
+unsafe extern "C" fn module_close<M: Modules>(handle: *mut c_void) -> u32 {
     if handle.is_null() { return record(INVALID_ARGUMENT, 9); }
-    let Some(call) = platform::ops().and_then(|o| o.module_close) else { return record(UNSUPPORTED, 9); };
-    record(unsafe { call(handle) }, 9)
+    record(port::status(unsafe { M::close(handle) }), 9)
 }
-unsafe extern "C" fn module_info(address: *mut c_void, out: *mut ModuleInfo) -> u32 {
+unsafe extern "C" fn module_info<M: Modules>(address: *mut c_void, out: *mut ModuleInfo) -> u32 {
     if !aligned_output(out) { return record(INVALID_ARGUMENT, 10); }
     let empty = ModuleInfo { base: ptr::null_mut(), name: ptr::null(), name_length: 0 };
     unsafe { out.write(empty) };
     if address.is_null() { return record(INVALID_ARGUMENT, 10); }
-    let Some(call) = platform::ops().and_then(|o| o.module_info) else { return record(UNSUPPORTED, 10); };
-    let mut value = empty;
-    let mut status = unsafe { call(address, &mut value) };
-    if status == OK {
-        if value.base.is_null() || value.name.is_null() || value.name_length > isize::MAX as usize
-            || (value.name as usize).checked_add(value.name_length).is_none() { status = OS_ERROR; }
-        else { unsafe { out.write(value) }; }
-    }
+    let status = match unsafe { M::info(address) } {
+        Ok(value) => {
+            if value.base.is_null() || value.name.is_null() || value.name_length > isize::MAX as usize
+                || (value.name as usize).checked_add(value.name_length).is_none() { OS_ERROR }
+            else { unsafe { out.write(value) }; OK }
+        }
+        Err(e) => e.status(),
+    };
     record(status, 10)
 }
 unsafe extern "C" fn read_stats(out: *mut Stats, size: usize) -> u32 {
@@ -220,18 +203,27 @@ pub const EMPTY: Ops = Ops {
     mapping_allocate: None, mapping_release: None, mapping_protect: None, module_open: None,
     module_symbol: None, module_close: None, module_info: None, read_stats: Some(read_stats),
 };
-pub const OPS: Ops = Ops {
-    environment_get: if CAPABILITIES & CAP_ENVIRONMENT != 0 { Some(environment_get) } else { None },
-    process_id: if CAPABILITIES & CAP_IDENTITY != 0 { Some(process_id) } else { None },
-    thread_id: if CAPABILITIES & CAP_IDENTITY != 0 { Some(thread_id) } else { None },
-    realtime_ns: if CAPABILITIES & CAP_REALTIME != 0 { Some(realtime_ns) } else { None },
-    random_bytes: if CAPABILITIES & CAP_ENTROPY != 0 { Some(random_bytes) } else { None },
-    mapping_allocate: if CAPABILITIES & CAP_NATIVE_MEMORY != 0 { Some(mapping_allocate) } else { None },
-    mapping_release: if CAPABILITIES & CAP_NATIVE_MEMORY != 0 { Some(mapping_release) } else { None },
-    mapping_protect: if CAPABILITIES & CAP_NATIVE_MEMORY != 0 { Some(mapping_protect) } else { None },
-    module_open: if CAPABILITIES & CAP_MODULES != 0 { Some(module_open) } else { None },
-    module_symbol: if CAPABILITIES & CAP_MODULES != 0 { Some(module_symbol) } else { None },
-    module_close: if CAPABILITIES & CAP_MODULES != 0 { Some(module_close) } else { None },
-    module_info: if CAPABILITIES & CAP_MODULES != 0 { Some(module_info) } else { None },
-    read_stats: Some(read_stats),
-};
+/// Capability bits and callbacks for the port's runtime service providers.
+pub fn negotiate<P: Port>() -> (u64, Ops) {
+    let mut caps = 0;
+    let mut ops = EMPTY;
+    if P::Environment::PROVIDED { caps |= CAP_ENVIRONMENT; ops.environment_get = Some(environment_get::<P::Environment>); }
+    if P::Identity::PROVIDED {
+        caps |= CAP_IDENTITY;
+        ops.process_id = Some(process_id::<P::Identity>); ops.thread_id = Some(thread_id::<P::Identity>);
+    }
+    if P::Realtime::PROVIDED { caps |= CAP_REALTIME; ops.realtime_ns = Some(realtime_ns::<P::Realtime>); }
+    if P::Entropy::PROVIDED { caps |= CAP_ENTROPY; ops.random_bytes = Some(random_bytes::<P::Entropy>); }
+    if P::NativeMapping::PROVIDED {
+        caps |= CAP_NATIVE_MEMORY;
+        ops.mapping_allocate = Some(mapping_allocate::<P::NativeMapping>);
+        ops.mapping_release = Some(mapping_release::<P::NativeMapping>);
+        ops.mapping_protect = Some(mapping_protect::<P::NativeMapping>);
+    }
+    if P::Modules::PROVIDED {
+        caps |= CAP_MODULES;
+        ops.module_open = Some(module_open::<P::Modules>); ops.module_symbol = Some(module_symbol::<P::Modules>);
+        ops.module_close = Some(module_close::<P::Modules>); ops.module_info = Some(module_info::<P::Modules>);
+    }
+    (caps, ops)
+}

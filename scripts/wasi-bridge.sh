@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 python3 integration/wasi/generate.py --check
 node --test tests/wasi_host.test.mjs
 mkdir -p artifacts/wasi-bridge
-cargo build --release --no-default-features --features wasi-dispatch --target wasm32-wasip1 --target-dir target/wasi-dispatch
+cargo rustc --lib --crate-type staticlib --release --no-default-features --features wasi-dispatch --target wasm32-wasip1 --target-dir target/wasi-dispatch
 cc="${CLANG:-clang}"
 args=(--target=wasm32-unknown-unknown -std=c11 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror -Iinclude -Inative -nostdlib
       tests/wasi_bridge.c native/wasi_bridge.c target/wasi-dispatch/wasm32-wasip1/release/libdotnet_pal_rs.a

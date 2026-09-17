@@ -6,7 +6,7 @@ root="$PWD"
 : "${WASI_SDK_PATH:?}"
 [[ -f artifacts/llvm/source-manifest.json && -f artifacts/llvm/source-sdk/libPortableRuntime.a ]]
 bash scripts/wasi-bridge.sh
-cargo build --release --no-default-features --features wasi-dispatch,linear-gc-small --target wasm32-wasip1 --target-dir target/wasi-isolated
+cargo rustc --lib --crate-type staticlib --release --no-default-features --features wasi-dispatch,linear-gc-small --target wasm32-wasip1 --target-dir target/wasi-isolated
 "$WASI_SDK_PATH/bin/clang" --target=wasm32-unknown-wasip1 -std=c11 -O2 -ffunction-sections -fdata-sections   -Wall -Wextra -Werror -Iinclude -c native/wasi_bridge.c -o artifacts/llvm/wasi_bridge.o
 rm -rf samples/LlvmGcProbe/obj/Release samples/LlvmGcProbe/bin/Release
 MSBuildEnableWorkloadResolver=false dotnet publish samples/LlvmGcProbe/LlvmGcProbe.csproj   -r wasi-wasm -c Release -p:IlcLlvmTarget=wasm32-unknown-wasip1 -p:PalWrap=false \

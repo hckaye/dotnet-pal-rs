@@ -286,6 +286,8 @@ typedef struct {
 const dotnet_pal_api *dotnet_pal_get_api(uint32_t version);
 
 /* linear-heap only: backend hooks, not additional runtime-facing entry points.
+ * browser-heap defines both hooks itself from memory.grow; an embedding that
+ * links another allocator into the same memory must not select browser-heap.
  * Allocate uninitialized exclusive storage aligned to alignment; NULL on failure.
  * Release is all-or-nothing and must preserve storage on failure. No reentry into
  * PAL, unwinding, cancellation, or managed callbacks. They run under the ledger

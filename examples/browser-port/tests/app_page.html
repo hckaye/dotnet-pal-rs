@@ -1,0 +1,36 @@
+<!doctype html>
+<!-- Template for page.mjs --app. The generated page embeds the managed
+     BrowserApp module, the PAL host, the WASI host and the runner, then runs
+     the C# program in the browser and prints its console output. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BrowserApp on dotnet-pal-rs</title>
+<style>pre { white-space: pre-wrap; }</style>
+</head>
+<body>
+<h1>BrowserApp on dotnet-pal-rs</h1>
+<p>Module: <code>__VARIANT__</code></p>
+<pre id="result">RUNNING</pre>
+<pre id="console"></pre>
+<script type="module">
+__HOST_JS__
+__WASI_JS__
+__APP_JS__
+const bytes = Uint8Array.from(atob('__WASM_BASE64__'), (c) => c.charCodeAt(0));
+const result = document.getElementById('result');
+const output = document.getElementById('console');
+try {
+    const run = await runApp(bytes);
+    output.textContent = run.lines.join('\n');
+    const pass = assertAppPassed(run);
+    result.textContent = 'MANAGED BROWSER PASS ' + JSON.stringify({
+        line: pass, code: run.code, palCalls: run.palCalls, wasiCalls: run.wasiCalls,
+        initialMemory: run.initialMemory, finalMemory: run.finalMemory, userAgent: navigator.userAgent,
+    });
+} catch (error) {
+    result.textContent = 'MANAGED BROWSER FAIL ' + (error && error.stack || error);
+}
+</script>
+</body>
+</html>

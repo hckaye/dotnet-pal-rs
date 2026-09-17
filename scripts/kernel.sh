@@ -3,10 +3,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ulimit -c 0
 mkdir -p artifacts
-cargo build --release
+cargo rustc --lib --crate-type staticlib --release --features linux
 cc -std=c11 -O2 -Wall -Wextra -Werror -Iinclude tests/kernel.c target/release/libdotnet_pal_rs.a -Wl,--gc-sections -lpthread -ldl -lm -o artifacts/kernel-linux
 timeout 60s artifacts/kernel-linux
-cargo build --release --no-default-features --features host-kernel --target-dir target/host-kernel
+cargo rustc --lib --crate-type staticlib --release --no-default-features --features host-kernel --target-dir target/host-kernel
 for suite in kernel kernel_faults; do
   provider=tests/kernel_host.c
   [[ "$suite" != kernel_faults ]] || provider=""

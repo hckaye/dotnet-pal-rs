@@ -1,34 +1,51 @@
 [package]
 name = "dotnet-pal-rs"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.98"
 description = "Experimental no_std OS boundary for NativeAOT portability research"
 license = "MIT"
 
+[workspace]
+members = ["crates/*", "examples/browser-port"]
+default-members = [".", "crates/*"]
+resolver = "2"
+
 [lib]
-crate-type = ["staticlib", "rlib"]
+crate-type = ["rlib"]
 
 [features]
-default = ["linux"]
+# No backend by default: a library consumer declares its own port with
+# `define_pal!`. The features below assemble standalone static libraries.
+default = []
 linux = ["dep:libc"]
+# Virtual memory from an immutable C host table (dotnet_pal_host_v2).
 host = []
-# Optional native helper services; legacy host configurations remain unchanged.
-host-support = ["host"]
-linear = []
-# On-demand storage supplied by the embedder; shares the native C heap on WASI.
-linear-heap = ["linear"]
-# Explicit bounded managed-heap experiment; the default boundary arena stays 8 MiB.
-linear-gc = ["linear"]
-# Small real arena for managed OOM qualification; not GCHeapHardLimit (64-bit only).
-linear-gc-small = ["linear-gc"]
+# Additional C host tables. Each requires its provider symbol before startup.
 host-services = ["host"]
 host-kernel = ["host-services"]
 host-runtime = ["host-kernel"]
 host-context = ["host-runtime"]
+host-support = ["host"]
+# OS-independent storage providers usable by any port.
+storage-arena = []
+storage-hooks = []
+storage-grow = []
+# Standalone linear-storage libraries: the bounded static arena, the embedder
+# hooks (sharing the C heap on WASI), or wasm32 memory.grow for modules with no
+# other allocator.
+linear = ["storage-arena"]
+linear-heap = ["linear", "storage-hooks"]
+linear-grow = ["linear", "storage-grow"]
+# Storage budget selection for managed experiments; the default stays 8 MiB.
+# These only change the capacity constant and select no backend by themselves.
+linear-gc = []
+# 64 MiB budget for managed OOM qualification; not GCHeapHardLimit (64-bit only).
+linear-gc-small = ["linear-gc"]
+# WASI Preview 1 providers on wasm32-wasip1.
+wasi-clock = ["linear"]
 wasi-runtime = ["wasi-clock"]
 wasi-dispatch = ["wasi-runtime"]
-wasi-clock = ["linear"]
 
 [dependencies]
 libc = { version = "=0.2.169", default-features = false, optional = true }
