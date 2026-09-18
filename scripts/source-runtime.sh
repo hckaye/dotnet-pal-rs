@@ -42,13 +42,14 @@ Path("artifacts/source-manifest.json").write_text(json.dumps(manifest, indent=2)
 PYMANIFEST
 clang++ -std=c++17 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
   -DDOTNET_PAL_OBSERVER_ONLY -Iinclude -Inative -c integration/dotnet10/gc_wrap.cpp -o artifacts/gc_observer.o
-cargo rustc --lib --crate-type staticlib --release --no-default-features --features host-context,host-support --target-dir target/host-kernel
+cargo rustc --lib --crate-type staticlib --release --no-default-features --features host-context,host-support,host-machine --target-dir target/host-kernel
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/services_host.c -o artifacts/services_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/kernel_host.c -o artifacts/kernel_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/runtime_host.c -o artifacts/runtime_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/context_host.c -o artifacts/context_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c native/support_posix.c -o artifacts/support_host.o
-clang -r artifacts/support_host.o artifacts/host_backend.o artifacts/services_host.o artifacts/kernel_host.o artifacts/runtime_host.o artifacts/context_host.o -o artifacts/host_services_backend.o
+clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c native/machine_linux.c -o artifacts/machine_host.o
+clang -r artifacts/machine_host.o artifacts/support_host.o artifacts/host_backend.o artifacts/services_host.o artifacts/kernel_host.o artifacts/runtime_host.o artifacts/context_host.o -o artifacts/host_services_backend.o
 bash scripts/qualify.sh "$overlay" "$root/artifacts/source-manifest.json"
 # Initialization alone prepares dump arguments; these runs do NOT create a dump.
 for backend in linux host; do

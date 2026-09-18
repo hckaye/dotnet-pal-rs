@@ -172,6 +172,7 @@ internal static class Program
         Task.WaitAll(Enumerable.Range(0, 4).Select(_ => Task.Run(SmallAllocations)).ToArray());
         ThreadAndFinalizerWork();
         SupportProbe.Check(sourceKernel);
+        MachineProbe.Check(sourceKernel);
         Stats after = Snapshot();
         if (wrapped)
         {

@@ -282,3 +282,13 @@ production readiness, support for all Rust targets or upstream servicing support
 - [Rust target support](https://doc.rust-lang.org/rustc/platform-support.html)
 - [WASI Preview 1](https://github.com/WebAssembly/WASI/tree/wasi-0.1/preview1)
 - [Rust sanitizers](https://doc.rust-lang.org/nightly/unstable-book/compiler-flags/sanitizer.html)
+
+## Machine resource boundary
+
+The `Machine` port trait and append-only C ABI group cover CPU discovery,
+process affinity, calling-thread placement, cache/page/physical-memory readings,
+available swap and virtual address limits. See [machine contracts](docs/machine.md)
+and `scripts/machine.sh`. The native source build preserves cgroup policy while
+routing these underlying OS measurements; whole-runtime OS isolation remains
+a separate strict gate. Windows `std` provider execution is now a CI job;
+its exact-commit result, not the workflow definition, establishes qualification.

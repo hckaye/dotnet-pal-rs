@@ -41,9 +41,12 @@ pub mod runtime;
 pub mod wasi;
 pub mod context;
 pub mod support;
+pub mod machine;
 pub mod storage;
 #[cfg(feature = "linux")]
 pub mod linux;
+#[cfg(feature = "linux")]
+mod machine_linux;
 #[cfg(feature = "host")]
 pub mod host;
 #[cfg(any(feature = "wasi-clock", feature = "wasi-runtime", feature = "wasi-dispatch"))]
@@ -116,6 +119,7 @@ pub struct Api {
     pub wasi: wasi::Ops,
     pub context: context::Ops,
     pub support: support::Ops,
+    pub machine: machine::Ops,
 }
 static RESERVE: Counter = Counter::new();
 static COMMIT: Counter = Counter::new();
@@ -277,6 +281,8 @@ pub fn build<P: Port>() -> Option<Api> {
     let (wasi_caps, wasi_ops) = wasi::negotiate::<P>();
     let (context_caps, context_ops) = context::negotiate::<P>()?;
     let (support_caps, support_ops) = support::negotiate::<P>();
+    let (machine_caps, machine_ops) = machine::negotiate::<P>();
+    capabilities |= machine_caps;
     capabilities |= services_caps | kernel_caps | runtime_caps | wasi_caps | context_caps | support_caps;
     Some(Api {
         header: Header { abi_version: ABI_VERSION, struct_size: mem::size_of::<Api>() as u32, capabilities },
@@ -289,6 +295,7 @@ pub fn build<P: Port>() -> Option<Api> {
         wasi: wasi_ops,
         context: context_ops,
         support: support_ops,
+        machine: machine_ops,
     })
 }
 
@@ -354,7 +361,7 @@ mod tests {
     #[test]
     fn capability_bits_never_alias() {
         let bits = [CAP_VM, CAP_LINEAR, CAP_DYNAMIC_LINEAR, services::CAP_CLOCK, services::CAP_SCHEDULER,
-            kernel::ALL, runtime::ALL, wasi::CAP, context::CAP, support::ALL];
+            kernel::ALL, runtime::ALL, wasi::CAP, context::CAP, support::ALL, machine::CAP];
         for (i, a) in bits.iter().enumerate() {
             assert_ne!(*a, 0);
             for b in &bits[i + 1..] { assert_eq!(a & b, 0, "capability groups overlap"); }
@@ -382,7 +389,7 @@ mod tests {
         type StackBounds = port::Absent; type ProcessBarrier = port::Absent; type Environment = port::Absent; type Identity = port::Absent;
         type Realtime = port::Absent; type Entropy = port::Absent; type NativeMapping = port::Absent; type Modules = port::Absent;
         type NativeHeap = port::Absent; type RwLocks = port::Absent; type ThreadName = port::Absent; type Diagnostics = port::Absent;
-        type Context = port::Absent; type Wasi = port::Absent; type Abort = port::Trap;
+        type Machine = port::Absent; type Context = port::Absent; type Wasi = port::Absent; type Abort = port::Trap;
         fn validate() -> bool { false }
     }
     static REJECT_SLOT: Slot = Slot::new();

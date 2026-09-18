@@ -218,6 +218,18 @@ pub trait SignalContext {
     const PROVIDED: bool = true;
     fn ops() -> Option<&'static crate::context::Ops>;
 }
+/// Machine measurements in bytes/CPU indices, never native OS selector values.
+/// Query ADDRESS_LIMIT returns u64::MAX for an unlimited address space. Cache
+/// queries may return Unsupported. Calls are thread-safe but not signal-safe.
+/// Affinity writes no more than capacity entries, does not retain the pointer,
+/// and must not partially change placement on an error from bind_current.
+pub trait Machine {
+    const PROVIDED: bool = true;
+    fn query(kind: u32) -> Result<u64>;
+    unsafe fn process_affinity(out: *mut u32, capacity: usize) -> Result<crate::machine::CpuList>;
+    fn bind_current(cpu: u32) -> Result<()>;
+    fn current_cpu() -> Result<u32>;
+}
 /// Raw WASIp1 transport (`CAP_WASI_DISPATCH`): one physical host import.
 pub trait WasiTransport {
     const PROVIDED: bool = true;
@@ -318,6 +330,12 @@ absent!(Diagnostics {
     unsafe fn write_stderr(_: *const u8, _: usize) -> core::result::Result<(), (usize, Error)> { Err((0, Error::Unsupported)) }
 });
 absent!(SignalContext { fn ops() -> Option<&'static crate::context::Ops> { None } });
+absent!(Machine {
+    fn query(_: u32) -> Result<u64> { Err(Error::Unsupported) }
+    unsafe fn process_affinity(_: *mut u32, _: usize) -> Result<crate::machine::CpuList> { Err(Error::Unsupported) }
+    fn bind_current(_: u32) -> Result<()> { Err(Error::Unsupported) }
+    fn current_cpu() -> Result<u32> { Err(Error::Unsupported) }
+});
 absent!(WasiTransport { unsafe fn dispatch(_: *const crate::wasi::Request) -> u32 { 52 } });
 
 /// A platform port: one provider type per capability, `Absent` where none exists.
@@ -347,6 +365,7 @@ pub trait Port {
     type ThreadName: ThreadName;
     type Diagnostics: Diagnostics;
     type Context: SignalContext;
+    type Machine: Machine;
     type Wasi: WasiTransport;
     type Abort: Abort;
     fn validate() -> bool { true }
@@ -401,6 +420,7 @@ macro_rules! declare_port {
             type ThreadName = $crate::__port_lookup!(ThreadName; $($key = $provider),*);
             type Diagnostics = $crate::__port_lookup!(Diagnostics; $($key = $provider),*);
             type Context = $crate::__port_lookup!(Context; $($key = $provider),*);
+            type Machine = $crate::__port_lookup!(Machine; $($key = $provider),*);
             type Wasi = $crate::__port_lookup!(Wasi; $($key = $provider),*);
             type Abort = $crate::__port_lookup!(Abort; $($key = $provider),*);
         }
@@ -431,6 +451,7 @@ macro_rules! __port_lookup {
     (ThreadName; ThreadName = $t:ty $(, $($rest:tt)*)?) => { $t };
     (Diagnostics; Diagnostics = $t:ty $(, $($rest:tt)*)?) => { $t };
     (Context; Context = $t:ty $(, $($rest:tt)*)?) => { $t };
+    (Machine; Machine = $t:ty $(, $($rest:tt)*)?) => { $t };
     (Wasi; Wasi = $t:ty $(, $($rest:tt)*)?) => { $t };
     (Abort; Abort = $t:ty $(, $($rest:tt)*)?) => { $t };
     ($want:ident; $other:ident = $t:ty $(, $($rest:tt)*)?) => { $crate::__port_lookup!($want; $($($rest)*)?) };

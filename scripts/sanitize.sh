@@ -14,11 +14,14 @@ export ASAN_OPTIONS=detect_leaks=1:detect_stack_use_after_return=1:halt_on_error
 export TSAN_OPTIONS=halt_on_error=1:exitcode=66:handle_segv=0:handle_sigbus=0
 export RUSTFLAGS="-Zsanitizer=$sanitizer -Zexternal-clangrt -Cdebuginfo=1 -Cforce-frame-pointers=yes"
 common=(-O1 -g -fno-omit-frame-pointer -fsanitize="$sanitizer" -Wall -Wextra -Werror -Iinclude -Inative)
-for backend in linux host-runtime host-support linear linear-heap; do
+for backend in linux host-runtime host-support host-machine linear linear-heap; do
   cargo "+$rust" rustc -Zbuild-std=core,compiler_builtins --lib --crate-type staticlib --release --no-default-features \
     --features "$backend" --target "$triple" --target-dir "target/$sanitizer-$backend"
   lib="target/$sanitizer-$backend/$triple/release/libdotnet_pal_rs.a"
-  if [[ "$backend" == host-support ]]; then
+  if [[ "$backend" == host-machine ]]; then
+    clang -std=c11 "${common[@]}" tests/machine.c native/machine_linux.c tests/host_backend.c "$lib" -Wl,--gc-sections -lpthread -ldl -lm -o "$out/machine-host"
+    timeout 120s "$out/machine-host"
+  elif [[ "$backend" == host-support ]]; then
     clang -std=c11 "${common[@]}" tests/support.c native/support_posix.c tests/host_backend.c "$lib" -Wl,--gc-sections -lpthread -ldl -lm -o "$out/support-host"
     timeout 120s "$out/support-host"
     clang -std=c11 "${common[@]}" tests/support_faults.c tests/host_backend.c "$lib" -Wl,--gc-sections -lpthread -ldl -lm -o "$out/support-faults"
@@ -39,7 +42,7 @@ for backend in linux host-runtime host-support linear linear-heap; do
       providers=(tests/host_backend.c tests/services_host.c tests/kernel_host.c tests/runtime_host.c)
     fi
     suites=(abi services kernel runtime)
-    if [[ "$backend" == linux ]]; then suites+=(support); fi
+    if [[ "$backend" == linux ]]; then suites+=(support machine); fi
     for suite in "${suites[@]}"; do
       clang -std=c11 "${common[@]}" "tests/$suite.c" "${providers[@]}" "$lib" \
         -Wl,--gc-sections -lpthread -ldl -lm -o "$out/$backend-$suite"

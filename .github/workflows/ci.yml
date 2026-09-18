@@ -46,6 +46,8 @@ jobs:
         run: bash scripts/context.sh
       - name: Demand-allocated linear storage and eight-thread failure contracts
         run: bash scripts/linear-heap.sh
+      - name: Machine topology, affinity and memory contracts
+        run: bash scripts/machine.sh
       - name: Actual NativeAOT GC negative and positive controls
         run: bash scripts/nativeaot.sh
       - name: Freestanding ARM64 boundary compile
@@ -63,6 +65,7 @@ jobs:
           sparse-checkout-cone-mode: false
           sparse-checkout: |
             /src/coreclr/gc/unix/gcenv.unix.cpp
+            /src/coreclr/gc/unix/cgroup.cpp
             /src/coreclr/gc/env/gcenv.os.h
             /src/coreclr/gc/unix/events.cpp
             /src/coreclr/nativeaot/Runtime/CMakeLists.txt
@@ -133,7 +136,7 @@ jobs:
           rustup override set 1.98.1
           for target in aarch64-unknown-none riscv64gc-unknown-none-elf thumbv7em-none-eabi; do
             rustup target add "$target"
-            for profile in host host-services host-kernel host-support linear-heap; do
+            for profile in host host-services host-kernel host-support host-machine linear-heap; do
               cargo rustc --lib --crate-type staticlib --release --no-default-features --features "$profile" --target "$target"
             done
           done
@@ -178,3 +181,20 @@ jobs:
             artifacts/qualification/**/symbols.txt
             artifacts/qualification/*-benchmark.json
           if-no-files-found: error
+
+  windows-std:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal
+          rustup override set 1.98.1
+      - name: Execute the Windows std provider contracts
+        run: |
+          cargo test -p dotnet-pal-rs --lib --no-default-features
+          cargo test -p dotnet-pal-std -- --test-threads=1
+          cargo check -p dotnet-pal-build

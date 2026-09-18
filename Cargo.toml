@@ -27,6 +27,7 @@ host-kernel = ["host-services"]
 host-runtime = ["host-kernel"]
 host-context = ["host-runtime"]
 host-support = ["host"]
+host-machine = ["host"]
 # OS-independent storage providers usable by any port.
 storage-arena = []
 storage-hooks = []

@@ -86,6 +86,10 @@ impl Port for Standalone {
     #[cfg(feature = "host-context")] type Context = Host;
     #[cfg(not(any(feature = "linux", feature = "host-context")))] type Context = Absent;
 
+    #[cfg(feature = "linux")] type Machine = Linux;
+    #[cfg(feature = "host-machine")] type Machine = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-machine")))] type Machine = Absent;
+
     #[cfg(feature = "wasi-dispatch")] type Wasi = crate::wasi_p1::Dispatch;
     #[cfg(not(feature = "wasi-dispatch"))] type Wasi = Absent;
 

@@ -244,6 +244,36 @@ typedef struct {
 } dotnet_pal_support_ops;
 typedef struct {dotnet_pal_header header;dotnet_pal_support_ops ops;} dotnet_pal_host_support;
 
+/* Measurements are bytes or CPU indices; selectors are NOT sysconf constants.
+ * CPU lists contain strictly increasing indices. On BUFFER_TOO_SMALL, count is
+ * the required element count and no partial list is returned. Other failures
+ * clear count/data. Output objects must not overlap. Up to 65536 CPUs supported.
+ * ADDRESS_LIMIT uses UINT64_MAX for unlimited. Zero cache size means unknown.
+ * The group does not itself implement cgroup policy; callers retain that policy.
+ */
+#define DOTNET_PAL_CAP_MACHINE UINT64_C(8388608)
+#define DOTNET_PAL_MACHINE_ONLINE_CPUS 1u
+#define DOTNET_PAL_MACHINE_POSSIBLE_CPUS 2u
+#define DOTNET_PAL_MACHINE_PHYSICAL_BYTES 3u
+#define DOTNET_PAL_MACHINE_AVAILABLE_BYTES 4u
+#define DOTNET_PAL_MACHINE_SWAP_BYTES 5u
+#define DOTNET_PAL_MACHINE_ADDRESS_LIMIT 6u
+#define DOTNET_PAL_MACHINE_CACHE_L1 7u
+#define DOTNET_PAL_MACHINE_CACHE_L2 8u
+#define DOTNET_PAL_MACHINE_CACHE_L3 9u
+#define DOTNET_PAL_MACHINE_CACHE_L4 10u
+#define DOTNET_PAL_MACHINE_PAGE_BYTES 11u
+#define DOTNET_PAL_MACHINE_MAX_CPUS 65536u
+typedef struct { uint64_t query_ok, affinity_ok, bind_ok, current_ok, rejected; } dotnet_pal_machine_stats;
+typedef struct {
+    uint32_t (*query)(uint32_t kind, uint64_t *out);
+    uint32_t (*process_affinity)(uint32_t *out, size_t capacity, size_t *count);
+    uint32_t (*bind_current)(uint32_t cpu);
+    uint32_t (*current_cpu)(uint32_t *out);
+    uint32_t (*read_stats)(dotnet_pal_machine_stats *out, size_t size);
+} dotnet_pal_machine_ops;
+typedef struct { dotnet_pal_header header; dotnet_pal_machine_ops ops; } dotnet_pal_host_machine;
+
 typedef struct {
     dotnet_pal_header header;
     dotnet_pal_vm_ops vm;
@@ -256,6 +286,7 @@ typedef struct {
     dotnet_pal_wasi_ops wasi;
     dotnet_pal_context_ops context;
     dotnet_pal_support_ops support;
+    dotnet_pal_machine_ops machine;
 } dotnet_pal_api;
 
 /* Use size checks BEFORE reading a capability group from a foreign table.
@@ -264,6 +295,7 @@ typedef struct {
 #define DOTNET_PAL_CONTEXT_API_SIZE (offsetof(dotnet_pal_api, context) + sizeof(dotnet_pal_context_ops))
 #define DOTNET_PAL_WASI_API_SIZE (offsetof(dotnet_pal_api, wasi) + sizeof(dotnet_pal_wasi_ops))
 #define DOTNET_PAL_RUNTIME_API_SIZE (offsetof(dotnet_pal_api, runtime) + sizeof(dotnet_pal_runtime_ops))
+#define DOTNET_PAL_MACHINE_API_SIZE (offsetof(dotnet_pal_api, machine) + sizeof(dotnet_pal_machine_ops))
 #define DOTNET_PAL_VM_API_SIZE offsetof(dotnet_pal_api, linear)
 #define DOTNET_PAL_LINEAR_API_SIZE offsetof(dotnet_pal_api, services)
 #define DOTNET_PAL_KERNEL_API_SIZE (offsetof(dotnet_pal_api, kernel) + sizeof(dotnet_pal_kernel_ops))
@@ -304,6 +336,8 @@ uint32_t dotnet_pal_storage_release_v2(void *address, size_t size);
  * Providers must supply at least a readable header even for a rejected table.
  */
 const dotnet_pal_host_api *dotnet_pal_host_v2(void);
+/* Only host-machine requires this additional immutable provider table. */
+const dotnet_pal_host_machine *dotnet_pal_host_machine_v2(void);
 const dotnet_pal_host_services *dotnet_pal_host_services_v2(void);
 /* Required only for host-kernel; legacy providers need no new symbols. */
 const dotnet_pal_host_kernel *dotnet_pal_host_kernel_v2(void);

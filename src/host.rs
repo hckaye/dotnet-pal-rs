@@ -77,6 +77,8 @@ impl port::Abort for Host { fn abort() -> ! { unsafe { dotnet_pal_host_abort() }
 /// Validates every table the enabled features require. Called from the
 /// standalone port's `validate`; a library port may reuse it.
 pub fn validate() -> bool {
+    #[cfg(feature = "host-machine")]
+    if !machine_provider::validate() { return false; }
     if cfg!(not(feature = "linear")) && !validate_vm() { return false; }
     #[cfg(feature = "host-services")]
     if !services::validate() { return false; }
@@ -357,5 +359,45 @@ pub mod context {
     impl port::SignalContext for Host {
         // Signal callbacks read the already-validated table; never call a host getter.
         fn ops() -> Option<&'static Ops> { TABLE.get().map(|t| &t.ops) }
+    }
+}
+
+
+#[cfg(feature = "host-machine")]
+mod machine_provider {
+    use super::*;
+    use crate::machine::{CpuList, Host as Table, CAP};
+    static MACHINE: Cached<Table> = Cached::new();
+    extern "C" { fn dotnet_pal_host_machine_v2() -> *const Table; }
+    pub fn validate() -> bool {
+        let Some(api) = (unsafe { table(dotnet_pal_host_machine_v2(), CAP) }) else { return false; };
+        if api.ops.query.is_none() || api.ops.process_affinity.is_none() || api.ops.bind_current.is_none() || api.ops.current_cpu.is_none() { return false; }
+        MACHINE.set(api); true
+    }
+    impl port::Machine for Host {
+        fn query(kind: u32) -> Result<u64> {
+            let f = MACHINE.get().and_then(|a| a.ops.query).ok_or(Error::Unsupported)?;
+            let mut value = 0;
+            port::from_status(unsafe { f(kind, &mut value) })?;
+            Ok(value)
+        }
+        unsafe fn process_affinity(out: *mut u32, capacity: usize) -> Result<CpuList> {
+            let f = MACHINE.get().and_then(|a| a.ops.process_affinity).ok_or(Error::Unsupported)?;
+            let mut n = 0;
+            match unsafe { f(out, capacity, &mut n) } {
+                crate::OK => Ok(CpuList::Written(n)),
+                crate::runtime::BUFFER_TOO_SMALL => Ok(CpuList::Required(n)),
+                code => Err(Error::from_status(code).unwrap_or(Error::Os)),
+            }
+        }
+        fn bind_current(cpu: u32) -> Result<()> {
+            let f = MACHINE.get().and_then(|a| a.ops.bind_current).ok_or(Error::Unsupported)?;
+            port::from_status(unsafe { f(cpu) })
+        }
+        fn current_cpu() -> Result<u32> {
+            let f = MACHINE.get().and_then(|a| a.ops.current_cpu).ok_or(Error::Unsupported)?;
+            let mut cpu = u32::MAX;
+            port::from_status(unsafe { f(&mut cpu) })?; Ok(cpu)
+        }
     }
 }

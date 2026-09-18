@@ -65,3 +65,11 @@ extern "C" uint32_t dotnet_pal_probe_support_stats(dotnet_pal_support_stats *out
     if(!p || p->header.struct_size<DOTNET_PAL_SUPPORT_API_SIZE || !p->support.read_stats)return DOTNET_PAL_UNSUPPORTED;
     return p->support.read_stats(out,size);
 }
+
+// Observation only: never invokes machine queries or changes thread placement.
+extern "C" uint32_t dotnet_pal_probe_machine_stats(dotnet_pal_machine_stats *out, size_t size) {
+    const auto *p = dotnet_pal_get_api(DOTNET_PAL_ABI_VERSION);
+    if (!p || p->header.struct_size < DOTNET_PAL_MACHINE_API_SIZE || !p->machine.read_stats)
+        return DOTNET_PAL_UNSUPPORTED;
+    return p->machine.read_stats(out, size);
+}

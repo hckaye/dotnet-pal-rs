@@ -14,6 +14,7 @@ import kernel_patch
 import runtime_patch
 import context_patch
 import support_patch
+import machine_patch
 
 REVISION = "4271d88e0aebf3d04f188f1334c2220d80555ef6"
 GC_FILE = "src/coreclr/gc/unix/gcenv.unix.cpp"
@@ -66,10 +67,13 @@ def main():
     head = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
     if head != REVISION:
         raise SystemExit(f"Expected {REVISION}, got {head}; re-audit before updating the pin")
-    subprocess.run(["git", "-C", str(root), "diff", "--exit-code", "HEAD", "--", GC_FILE, CMAKE_FILE, *kernel_patch.FILES, *context_patch.FILES, *support_patch.FILES], check=True)
+    subprocess.run(["git", "-C", str(root), "diff", "--exit-code", "HEAD", "--", GC_FILE, CMAKE_FILE, *kernel_patch.FILES, *context_patch.FILES, *support_patch.FILES, *machine_patch.FILES], check=True)
     gc = support_patch.gc(kernel_patch.gc_extra(patch_gc((root / GC_FILE).read_text())))
+    gc = machine_patch.gc(gc)
     extra = {path: transform((root / path).read_text()) for path, transform in kernel_patch.TRANSFORMS.items()}
     extra[kernel_patch.PAL] = support_patch.pal(context_patch.pal(runtime_patch.pal(extra[kernel_patch.PAL])))
+    extra[kernel_patch.PAL] = machine_patch.pal(extra[kernel_patch.PAL])
+    extra.update({path: transform((root / path).read_text()) for path, transform in machine_patch.TRANSFORMS.items()})
     extra.update({path: transform((root / path).read_text()) for path, transform in context_patch.TRANSFORMS.items()})
     extra.update({path: transform((root / path).read_text()) for path, transform in support_patch.TRANSFORMS.items()})
     cmake = (root / CMAKE_FILE).read_text()
@@ -83,7 +87,7 @@ if(DOTNET_PAL_ROOT)
   # The adapters use C++17 inline variables and lock-free atomic traits.
   set(CMAKE_CXX_STANDARD 17)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
-  add_definitions(-DDOTNET_PAL_GC_VM=1 -DDOTNET_PAL_KERNEL=1 -DDOTNET_PAL_RUNTIME=1 -DDOTNET_PAL_NATIVE_CONTEXT=1 -DDOTNET_PAL_SUPPORT=1)
+  add_definitions(-DDOTNET_PAL_GC_VM=1 -DDOTNET_PAL_KERNEL=1 -DDOTNET_PAL_RUNTIME=1 -DDOTNET_PAL_NATIVE_CONTEXT=1 -DDOTNET_PAL_SUPPORT=1 -DDOTNET_PAL_MACHINE=1)
   include_directories("${DOTNET_PAL_ROOT}/include" "${DOTNET_PAL_ROOT}/native")
 endif()
 
