@@ -22,3 +22,24 @@ class ContextPatchTests(unittest.TestCase):
         workflow=(Path(__file__).resolve().parents[1]/'.github/workflows/ci.yml').read_text()
         for name in [patch_runtime.GC_FILE,patch_runtime.CMAKE_FILE,*kernel_patch.FILES,*context_patch.FILES]:
             self.assertIn('/'+name,workflow,'CI sparse checkout would omit '+name)
+
+    def test_gc_identity_uses_token_and_preserves_other_runtime_paths(self):
+        source = """#ifdef TARGET_UNIX
+class EEThreadId
+{
+    bool IsCurrentThread() { return m_isValid && pthread_equal(m_id, pthread_self()); }
+    void SetToCurrentThread() { m_id = pthread_self(); m_isValid = true; }
+};
+#else
+class EEThreadId
+{
+    bool IsCurrentThread() { return windows_identity(); }
+};
+#endif
+"""
+        out = context_patch.gc_structs(source)
+        self.assertIn('dotnet_pal::ThreadIdentity<dotnet_pal_context::thread_token>', out)
+        self.assertIn('return windows_identity()', out)
+        self.assertIn('pthread_equal(m_id, pthread_self())', out)
+        for invalid in (out, source.replace('m_id = pthread_self()', 'm_id = 0'), source+source):
+            with self.assertRaises(ValueError): context_patch.gc_structs(invalid)

@@ -52,4 +52,6 @@ for backend in linux host-runtime host-support host-machine linear linear-heap; 
     done
   fi
 done
+clang++ -std=c++17 "${common[@]}" tests/thread_identity.cpp -pthread -o "$out/thread-identity"
+timeout 60s "$out/thread-identity"
 echo "MIXED RUST/C $sanitizer SANITIZER PASS (boundary contracts; not .NET runtime instrumentation)"

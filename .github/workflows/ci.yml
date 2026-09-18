@@ -67,6 +67,7 @@ jobs:
             /src/coreclr/gc/unix/gcenv.unix.cpp
             /src/coreclr/gc/unix/cgroup.cpp
             /src/coreclr/gc/env/gcenv.os.h
+            /src/coreclr/gc/env/gcenv.structs.h
             /src/coreclr/gc/unix/events.cpp
             /src/coreclr/nativeaot/Runtime/CMakeLists.txt
             /src/coreclr/nativeaot/Runtime/unix/PalUnix.cpp

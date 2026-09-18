@@ -62,6 +62,7 @@ for profile in workstation server; do
   collector=WorkstationGC
   [[ "$profile" != server ]] || collector=ServerGC
   python3 scripts/audit_dependencies.py \
+    --forbid-runtime-symbol pthread_self \
     --runtime "$overlay/libRuntime.$collector.a" --pal target/release/libdotnet_pal_rs.a \
     --binary "artifacts/qualification/$profile-linux/GcProbe" \
     --output "artifacts/qualification/$profile-linux/dependency-inventory.log"

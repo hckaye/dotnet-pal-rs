@@ -100,3 +100,18 @@ Not redirected by this group: managed Thread creation in BCL native shims,
 hijacking/signal/context handling, compiler-generated TLS, native code unwinding,
 all native heap allocation, or arbitrary BCL OS access. These are distinct audit
 items; none is implied by the presence of a kernel capability.
+
+## Native GC thread identity
+
+The source adapter also replaces the Unix `EEThreadId` helper with an opaque
+context-token identity. The token is compared only while the identity is valid;
+`Clear` stops querying the provider, and a new `SetToCurrentThread` rebinds it.
+Tokens can be recycled after native thread exit, so this is not a persistent
+identity or an ABA-safe handle. The original Unix/Windows helpers remain intact
+for builds without the NativeAOT context guard. The context table must already
+be initialized, just as for the runtime thread-attachment path.
+
+A C++ two-thread contract test checks this helper. The source-build inventory
+rejects any residual strong or weak `pthread_self` import in either GC runtime
+archive. Other direct OS calls remain reported; absence of this particular import
+is not evidence of complete OS independence.

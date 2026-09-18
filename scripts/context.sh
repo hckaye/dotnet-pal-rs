@@ -9,3 +9,6 @@ timeout 60s artifacts/context/linux
 cargo rustc --lib --crate-type staticlib --release --no-default-features --features host-context --target-dir target/host-context
 cc -std=c11 -O2 -Wall -Wextra -Werror -Iinclude -DPAL_CONTEXT_HOST tests/context.c tests/context_host.c tests/runtime_host.c tests/host_backend.c tests/services_host.c tests/kernel_host.c     target/host-context/release/libdotnet_pal_rs.a -Wl,--gc-sections -lpthread -ldl -lm -o artifacts/context/host
 for fault in {0..5};do timeout 60s artifacts/context/host "$fault";done
+
+c++ -std=c++17 -O2 -Wall -Wextra -Werror -Inative tests/thread_identity.cpp -pthread -o artifacts/thread-identity
+timeout 60s artifacts/thread-identity

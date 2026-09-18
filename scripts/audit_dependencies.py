@@ -114,6 +114,15 @@ def assess_runtime(runtime):
     }
 
 
+def forbidden_references(runtime, names):
+    """Selected no-regression gates do not waive the full isolation gate."""
+    names = set(names)
+    rows = [dict(item, binding='strong') for item in runtime['unresolved_strong']]
+    rows.extend({'symbol':symbol, 'owners':owners, 'binding':'weak'}
+                for symbol, owners in runtime['unresolved_weak'].items())
+    return [row for row in rows if row['symbol'].split('@',1)[0] in names]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime', type=Path, required=True)
@@ -122,6 +131,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--nm', default='nm')
     parser.add_argument('--require-isolated', action='store_true')
+    parser.add_argument('--forbid-runtime-symbol', action='append', default=[], help='reject an exact strong/weak runtime import; does not approve other dependencies')
     args = parser.parse_args()
     report = {'schema': 1,
               'scope': 'link references; not a syscall trace, call-graph proof, or proof of full OS independence',
@@ -129,11 +139,14 @@ def main():
               'rust_pal': inventory(args.pal.resolve(), args.nm),
               'executable': inventory(args.binary.resolve(), args.nm, dynamic=True)}
     report.update(assess_runtime(report['runtime']))
+    report['forbidden_runtime_references'] = forbidden_references(report['runtime'], args.forbid_runtime_symbol)
     bypasses = report['runtime_os_references_outside_boundary']
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(f"DEPENDENCY INVENTORY runtime_external={len(report['runtime']['unresolved_strong'])} remaining_os_references={len(bypasses)} output={args.output}")
     print('REMAINING OS REFERENCES: ' + ', '.join(i['symbol'] for i in bypasses))
+    if report['forbidden_runtime_references']:
+        raise SystemExit('forbidden runtime imports remain: ' + ', '.join(i['symbol'] for i in report['forbidden_runtime_references']))
     if not report['has_runtime_entrypoint']:
         raise SystemExit('rebuilt runtime lacks a strong reference to dotnet_pal_get_api')
     if args.require_isolated and not report['isolated_runtime']:
