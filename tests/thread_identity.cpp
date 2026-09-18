@@ -10,7 +10,11 @@ static uintptr_t current() {
     ++calls;
     return id;
 }
-using Identity = dotnet_pal::ThreadIdentity<current>;
+// The runtime has class forward declarations both before and after gcenv.structs.h.
+class EEThreadId;
+class EEThreadId final : public dotnet_pal::ThreadIdentity<current> {};
+class EEThreadId;
+using Identity = EEThreadId;
 int main() {
     Identity main_id;
     assert(!main_id.IsCurrentThread() && calls.load()==0);

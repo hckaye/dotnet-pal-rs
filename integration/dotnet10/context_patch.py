@@ -53,6 +53,6 @@ def gc_structs(text):
         raise ValueError('GC thread identity call sites changed')
     replacement='''#include "context_adapter.h"
 #include "thread_identity.h"
-using EEThreadId = dotnet_pal::ThreadIdentity<dotnet_pal_context::thread_token>;'''
+class EEThreadId final : public dotnet_pal::ThreadIdentity<dotnet_pal_context::thread_token> {};'''
     return text[:begin]+guarded(original,replacement)+text[end:]
 TRANSFORMS={SIGNALS:signals,HEADER:header,THREAD:thread,GC_STRUCTS:gc_structs}
