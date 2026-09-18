@@ -290,5 +290,5 @@ process affinity, calling-thread placement, cache/page/physical-memory readings,
 available swap and virtual address limits. See [machine contracts](docs/machine.md)
 and `scripts/machine.sh`. The native source build preserves cgroup policy while
 routing these underlying OS measurements; whole-runtime OS isolation remains
-a separate strict gate. Windows `std` provider execution is now a CI job;
-its exact-commit result, not the workflow definition, establishes qualification.
+a separate strict gate. Windows `std` provider contract execution is covered by the `windows-std`
+CI job; its result does not establish managed NativeAOT support on Windows.

@@ -15,6 +15,7 @@ fn possible_list(data: &[u8]) -> Result<u64> {
     let text = core::str::from_utf8(data).map_err(|_| Error::Os)?.trim();
     let mut highest = None;
     for range in text.split(',') {
+        if range.is_empty() || range.bytes().any(|b| !b.is_ascii_digit() && b != b'-') { return Err(Error::Os); }
         let mut parts = range.split('-');
         let low = parts.next().ok_or(Error::Os)?.parse::<u32>().map_err(|_| Error::Os)?;
         let high = match parts.next() { Some(v) => v.parse::<u32>().map_err(|_| Error::Os)?, None => low };
@@ -104,6 +105,6 @@ mod tests {
     use super::*;
     #[test] fn sparse_possible_indices() {
         assert_eq!(possible_list(b"0-3,8,32-63\n"), Ok(64));
-        for x in [b"".as_slice(), b"3-2", b"0-2,2", b"0--3", b"1,0", b"65536", b"0-1,", b"max"] { assert!(possible_list(x).is_err(), "{:?}", x); }
+        for x in [b"".as_slice(), b"3-2", b"0-2,2", b"0--3", b"1,0", b"65536", b"0-1,", b"max", b"+1", b"0, 1"] { assert!(possible_list(x).is_err(), "{:?}", x); }
     }
 }

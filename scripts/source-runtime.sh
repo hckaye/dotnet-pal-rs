@@ -27,6 +27,7 @@ for collector in WorkstationGC ServerGC; do
   [[ ${#archives[@]} == 1 ]] || { echo "Expected exactly one rebuilt $collector archive" >&2; exit 1; }
   nm -u "${archives[0]}" > "artifacts/source-$collector-undefined.txt"
   grep -q 'dotnet_pal_get_api' "artifacts/source-$collector-undefined.txt"
+  python3 scripts/audit_machine_boundary.py "${archives[0]}" --output "artifacts/source-$collector-machine.json"
   rm "$overlay/libRuntime.$collector.a"
   cp "${archives[0]}" "$overlay/libRuntime.$collector.a"
 done

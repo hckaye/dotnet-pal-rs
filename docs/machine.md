@@ -39,3 +39,12 @@ Both sanitizer configurations include the Linux and host machine tests.
 These functions are not async-signal-safe. A machine capability and an archive
 cross-build do not supply target code generation, exception metadata, or a full
 NativeAOT port. Exact-commit CI logs determine qualification, not this document.
+
+`scripts/audit_machine_boundary.py` requires all three routed native object
+members, a strong PAL reference in each, and absence of direct machine-related
+strong or weak imports. The native source build runs this gate on both collectors.
+Other runtime/BCL dependencies remain visible in the separate full inventory.
+
+The C host test runs 13 isolated malformed-table/provider-error cases, including
+header truncation and missing capability/callback negotiation. Both mixed-language
+sanitizer configurations run these cases as well.

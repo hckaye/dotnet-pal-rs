@@ -177,6 +177,7 @@ jobs:
             artifacts/source-build.log
             artifacts/source-*-undefined.txt
             artifacts/source-manifest.json
+            artifacts/source-*-machine.json
             artifacts/qualification/**/*.log
             artifacts/qualification/**/symbols.txt
             artifacts/qualification/*-benchmark.json

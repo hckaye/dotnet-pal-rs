@@ -21,6 +21,8 @@ for backend in linux host-runtime host-support host-machine linear linear-heap; 
   if [[ "$backend" == host-machine ]]; then
     clang -std=c11 "${common[@]}" tests/machine.c native/machine_linux.c tests/host_backend.c "$lib" -Wl,--gc-sections -lpthread -ldl -lm -o "$out/machine-host"
     timeout 120s "$out/machine-host"
+    clang -std=c11 "${common[@]}" tests/machine_faults.c tests/host_backend.c "$lib" -Wl,--gc-sections -lpthread -ldl -lm -o "$out/machine-faults"
+    for mode in {1..13}; do timeout 30s "$out/machine-faults" "$mode"; done
   elif [[ "$backend" == host-support ]]; then
     clang -std=c11 "${common[@]}" tests/support.c native/support_posix.c tests/host_backend.c "$lib" -Wl,--gc-sections -lpthread -ldl -lm -o "$out/support-host"
     timeout 120s "$out/support-host"

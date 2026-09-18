@@ -9,6 +9,7 @@ The following gates describe what the executable suites actually establish.
 | Gate | Implementation / evidence producer |
 | --- | --- |
 | Native VM and host replacement | C ABI tests, GC negative/positive controls, Linux x64/ARM64 |
+| Machine measurements and CPU placement | Neutral CPU lists and memory queries; Linux and host implementations; source adapters preserve cgroup policy |
 | Clocks, sleep, yield | Linux, immutable host tables, real WASIp1 clock/error tests |
 | Events, recursive locks, threads, TLS, stacks, barriers | Linux and host-kernel contracts; native runtime/GC source adapters |
 | Native source builds | Both WorkstationGC and ServerGC archives; actual x64/ARM64 execution without --wrap |
@@ -35,8 +36,9 @@ A completed table row is not a claim that every method in its subsystem uses Rus
 
 1. **Whole-runtime OS isolation.** Current native archive inventories still expose
    direct OS references outside the boundary. These include signal/context and
-   activation handling, module inspection/loading, environment and CPU/memory
-   topology, crash-dump/diagnostic I/O and native allocation. The strict
+   activation handling, module inspection/loading, remaining container/NUMA policy I/O,
+   crash-dump/diagnostic I/O and native allocation. Machine measurements and
+   affinity are routed, with a separate member-level no-bypass gate. The strict
    `audit_dependencies.py --require-isolated` gate is expected to reject this
    state. A successful reporting run must not be described as an isolation pass.
 2. **All BCL native dependencies.** File, network, cryptography, process and other
@@ -54,8 +56,8 @@ A completed table row is not a claim that every method in its subsystem uses Rus
    components, WebAssembly-GC reference objects, files, sockets, DOM access and
    JavaScript interop beyond the five boundary imports are not implemented or
    qualified. Managed OOM/finalizer qualification in Wasm does not yet match the
-   wider native suite. The desktop `std` port has executed its table test on
-   Linux and macOS only; its Windows providers compile but have not run.
+   wider native suite. The desktop `std` port executes its table contracts on Linux, macOS
+   and Windows. This does not qualify a source-rebuilt Windows managed runtime.
 5. **Product qualification.** A maintained upstream release must be selected and
    re-audited, the actual application's needed BCL surface must be tested, and
    longer deployment-specific stress/performance/security qualification is needed.

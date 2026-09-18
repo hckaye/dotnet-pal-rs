@@ -19,6 +19,7 @@ def function(text, name, body):
 def prefix(text):
     return f'#ifdef {MARKER}\n#include "machine_adapter.h"\n#endif\n' + text
 def gc(text):
+    if MARKER in text: raise ValueError("machine source is already patched")
     text = line(text, '    int cpuCount = sysconf(SYSCONF_GET_NUMPROCS);',
         '    int cpuCount = static_cast<int>(dotnet_pal_machine::long_query(DOTNET_PAL_MACHINE_ONLINE_CPUS));')
     text = line(text, '    int configuredCpuCount = minipal_get_cpu_max_possible_count();',
@@ -43,6 +44,7 @@ def gc(text):
     text = function(text, 'GetAvailablePageFile', '    return dotnet_pal_machine::swap_bytes();')
     return prefix(text)
 def pal(text):
+    if MARKER in text: raise ValueError("machine source is already patched")
     text = once(text, 'bool PalInit()\n{', 'bool PalInit()\n{\n#ifdef DOTNET_PAL_MACHINE\n    if (!dotnet_pal_machine::api()) return false;\n#endif')
     start = text.index('#if HAVE_SCHED_GETAFFINITY\n', text.index('void InitializeCurrentProcessCpuCount()'))
     end = text.index('#endif // HAVE_SCHED_GETAFFINITY', start) + len('#endif // HAVE_SCHED_GETAFFINITY')
@@ -50,6 +52,7 @@ def pal(text):
     text = text[:start] + guarded(text[start:end], body) + text[end:]
     return prefix(text)
 def cgroup(text):
+    if MARKER in text: raise ValueError("machine source is already patched")
     replacements = {
         '    if (getrlimit(RLIMIT_AS, &curr_rlimit) == 0)': '    if (dotnet_pal_machine::read_limit(&curr_rlimit.rlim_cur) == 0)',
         '    long pages = sysconf(_SC_PHYS_PAGES);': '    long pages = dotnet_pal_machine::physical_pages();',
