@@ -104,6 +104,7 @@ jobs:
             /src/coreclr/gc/unix/events.cpp
             /src/coreclr/nativeaot/Runtime/CMakeLists.txt
             /src/coreclr/nativeaot/Runtime/unix/PalUnix.cpp
+            /src/coreclr/nativeaot/Runtime/unix/unixasmmacrosamd64.inc
             /src/coreclr/nativeaot/Runtime/unix/UnixSignals.cpp
             /src/coreclr/nativeaot/Runtime/unix/UnixSignals.h
             /src/coreclr/nativeaot/Runtime/unix/PalCreateDump.cpp
@@ -226,7 +227,7 @@ jobs:
           rustup toolchain install 1.98.1 --profile minimal
           rustup override set 1.98.1
           sudo apt-get update
-          sudo apt-get install -y clang llvm lld cmake ninja-build python3 time libicu-dev liblttng-ust-dev libunwind-dev libssl-dev libkrb5-dev zlib1g-dev
+          sudo apt-get install -y clang llvm lld cmake ninja-build python3 time libicu-dev liblttng-ust-dev libunwind-dev libssl-dev libkrb5-dev zlib1g-dev libcap2-bin
       - name: Rebuild and qualify both native GC profiles without linker wrapping
         run: bash scripts/source-runtime.sh artifacts/runtime-source
       - name: Console probe with the boundary's System.Native
@@ -236,6 +237,8 @@ jobs:
       - name: Processes, signal registrations, system facts, links and locks from C#
         run: bash scripts/system-probe.sh
       - name: FileSystemWatcher, MemoryMappedFile, DriveInfo, NetworkInterface and named pipes from C#
+        env:
+          PROBE_GRANT_NET_RAW: '1'
         run: bash scripts/facilities-probe.sh
       - name: System.Console on a pseudo-terminal
         run: bash scripts/terminal-probe.sh

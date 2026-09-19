@@ -21,7 +21,8 @@ links the image with `link.sh` and runs it. It keeps the serial output in
 semihosting. A successful run prints:
 
 ```text
-TABLE PASS threads=60 waits=58 timeouts=3 locks=4002 reserves=3 heap=4097 rejected=10 region=... free=...
+MEMORY PROTECTION PASS reserve, decommit, release, RO, NX, RX and instruction cache
+TABLE PASS threads=60 waits=... timeouts=... locks=... reserves=... heap=... rejected=... region=... free=...
 EXIT code=0
 ```
 
@@ -37,7 +38,7 @@ builds an image with all of them plus the pinned .NET SDK, for macOS developers.
 
 | Capability | Provider |
 | --- | --- |
-| `VirtualMemory`, `NativeMapping` | ranges carved from the RAM behind the image |
+| `VirtualMemory`, `NativeMapping` | identity-backed RAM with 4 KiB page protection |
 | `NativeHeap` | first fit over a 64 MiB slice of that RAM, 16-byte alignment |
 | `Clock`, `Realtime`, `Scheduler` | `CNTVCT_EL0`, plus a fixed epoch for the wall clock |
 | `Events`, `Mutexes`, `Threads`, `ThreadLocal`, `RwLocks` | the cooperative scheduler |
@@ -46,7 +47,7 @@ builds an image with all of them plus the pinned .NET SDK, for macOS developers.
 | `Diagnostics`, `Streams` | the PL011 UART at 0x0900_0000; reads report end of input |
 | `Topology` | one CPU, the RAM figures, CPU feature words from the ID registers |
 | `Process` | exit through semihosting; no debugger, no crash dump utility |
-| `Image` | the image's own `.eh_frame_hdr`/`.eh_frame` from the linker script; RAM is readable, device space is not |
+| `Image` | the image's own `.eh_frame_hdr`/`.eh_frame` from the linker script; readability checks the RAM page descriptors; device space is not readable |
 | `Modules` | the one image, named `app`, base at the load address |
 | `Faults` | the synchronous exception vector: the interrupted registers go to the installed handler, which may edit them and resume |
 | `Files`, `Volumes`, `Watches`, `Mappings` | `dotnet-pal-memfs`, an in-memory file system on the port's heap through the Rust global allocator, with links, modes, times, locks, change events and file mappings; times from the port's wall clock; a reader that waits sleeps in the port's scheduler; one volume at `/` with the capacity of the file system |
@@ -100,14 +101,14 @@ prints the syndrome and ends the run with status 132.
   when it comes back. With nothing else to run, the waiter spins on the counter.
   Waiting costs CPU, and a wait for something nobody will do hangs the run
   instead of being reported.
-- **No memory protection.** Everything the boot code maps is readable and
-  writable at EL1. `reserve` hands out RAM that is already accessible, `commit`
-  has nothing to do, `decommit` zeroes the range and leaves it readable, and
-  `protect` accepts any protection and applies none. There is no way to fault on
-  an uncommitted or protected access. It is eager RAM, not virtual memory. The one
-  exception is the first 2 MiB of the address space, which stay unmapped so that a
-  null dereference faults. There are no guard pages: a stack overflow runs into
-  whatever lies below the stack.
+- **Bounded, identity-backed memory.** Reservations and decommitted pages are
+  inaccessible, and native mappings enforce read/write/execute permissions at
+  4 KiB granularity. New commits are zeroed; repeated commits preserve data.
+  There is no overcommit, swapping or relocation of physical backing: reserving
+  addresses still consumes the finite RAM budget, and decommit does not return
+  that budget until release. Write-only and execute-only mappings are rejected
+  rather than widened to readable mappings. The boot image is not hardened to
+  W^X and there are still no stack guard pages.
 - **No wall clock.** `realtime_ns` is the fixed epoch 2026-01-01T00:00:00Z plus
   the time since reset. The machine has no battery-backed clock and no network.
 - **No entropy, no environment, no signals, no network.** Synchronous exceptions
@@ -130,7 +131,7 @@ The image links at 0x4008_0000 and QEMU loads it there. RAM is
 | --- | --- |
 | 0x4008_0000 | `.text`, `.rodata`, `.eh_frame`, `.data`, `.init_array`, `.tdata`, `.tbss`, `.bss` |
 | after `.bss`, 2 MiB | boot thread stack (`__boot_stack_bottom` to `__boot_stack_top`) |
-| `__heap_start` to 0x8000_0000 | the static region, about 1021 MiB |
+| `__heap_start` to 0x8000_0000 | the static region, about 1019 MiB (depending on image size) |
 
 The region is an address-ordered free list with coalescing, first fit, and no
 per-allocation metadata: the caller returns the size it was given, which is what
@@ -142,9 +143,13 @@ first allocation and manages that slice itself.
 The identity map has one level-1 table. Its first entry points to a level-2 table
 of 2 MiB blocks for 0 to 1 GiB: the first block is invalid, so the null page
 faults, and the rest is Device-nGnRnE and execute never, which covers the UART.
-Its second entry is a 1 GiB block, Normal write-back cacheable, for the RAM at
-1 GiB to 2 GiB. Everything else is unmapped, so a stray access faults instead of
-reaching a device.
+Its second entry points to another level-2 table and 512 level-3 tables covering
+RAM with Normal write-back cacheable 4 KiB pages. The image, boot stack and page
+tables remain mapped. Free pages are inaccessible; the allocator maps owned
+storage RW/NX, and VM reservations revoke access until commit. Permission changes
+use break-before-make and invalidate the old translations. Executable mappings
+synchronize the data and instruction caches, including repeated RW-to-RX changes.
+Everything else is unmapped, so a stray access faults instead of reaching a device.
 
 ## Boot
 
@@ -193,6 +198,11 @@ system and reads it back, renames, enumerates and removes. `tests/ctor.cpp` prov
 `.init_array` ran, and
 `tests/registers.S` checks that the callee-saved registers survive a switch by
 hand, because a C compiler is free to spill them around a call.
+
+The memory checks also require hardware faults after reserve, decommit and
+release, reject writes to read-only mappings and instruction fetches from NX
+mappings, execute generated code after RW-to-RX transitions, and repeat after
+rewriting the instructions. Return codes alone cannot satisfy those checks.
 
 The test uses no libc: the only functions it calls outside itself are the ones
 the port exports. It prints `TABLE PASS` and exits 0, or `FAIL <what>` and exits 1.

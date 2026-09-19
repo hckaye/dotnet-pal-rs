@@ -163,17 +163,11 @@ impl port::Topology for Std {
     fn cache_size() -> Result<usize> {
         #[cfg(target_os = "linux")]
         {
-            let mut best = 0u64;
-            for name in [libc::_SC_LEVEL1_DCACHE_SIZE, libc::_SC_LEVEL2_CACHE_SIZE, libc::_SC_LEVEL3_CACHE_SIZE, libc::_SC_LEVEL4_CACHE_SIZE] {
-                let value = unsafe { libc::sysconf(name) };
-                if value > 0 { best = best.max(value as u64); }
-            }
-            if best == 0 {
-                for index in 0..4 {
-                    if let Some(size) = read(&format!("/sys/devices/system/cpu/cpu0/cache/index{index}/size")).and_then(|t| parse_size(&t)) { best = best.max(size); }
-                }
-            }
-            usize::try_from(best).map_err(|_| Error::Os)
+            // Use the same per-level fallback as cache_level_size, including
+            // when sysconf reports only some of the machine's cache levels.
+            let mut best = 0;
+            for level in 1..=4 { best = best.max(Self::cache_level_size(level)?); }
+            Ok(best)
         }
         #[cfg(target_os = "macos")]
         {

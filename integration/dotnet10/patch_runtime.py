@@ -18,6 +18,7 @@ import topology_patch
 import process_patch
 import image_patch
 import minipal_patch
+import tls_patch
 
 REVISION = "4271d88e0aebf3d04f188f1334c2220d80555ef6"
 GC_FILE = "src/coreclr/gc/unix/gcenv.unix.cpp"
@@ -71,7 +72,7 @@ def main():
     if head != REVISION:
         raise SystemExit(f"Expected {REVISION}, got {head}; re-audit before updating the pin")
     subprocess.run(["git", "-C", str(root), "diff", "--exit-code", "HEAD", "--", GC_FILE, CMAKE_FILE, *kernel_patch.FILES, *context_patch.FILES, *support_patch.FILES,
-                    *topology_patch.FILES, *image_patch.FILES, *minipal_patch.FILES], check=True)
+                    *topology_patch.FILES, *image_patch.FILES, *minipal_patch.FILES, *tls_patch.FILES], check=True)
     gc = topology_patch.gc(support_patch.gc(kernel_patch.gc_extra(patch_gc((root / GC_FILE).read_text()))))
     extra = {path: transform((root / path).read_text()) for path, transform in kernel_patch.TRANSFORMS.items()}
     extra[kernel_patch.PAL] = support_patch.pal(context_patch.pal(runtime_patch.pal(extra[kernel_patch.PAL])))
@@ -84,6 +85,7 @@ def main():
     extra.update({path: transform((root / path).read_text()) for path, transform in topology_patch.TRANSFORMS.items()})
     extra.update({path: transform((root / path).read_text()) for path, transform in image_patch.TRANSFORMS.items()})
     extra.update({path: transform((root / path).read_text()) for path, transform in minipal_patch.TRANSFORMS.items()})
+    extra.update({path: transform((root / path).read_text()) for path, transform in tls_patch.TRANSFORMS.items()})
     cmake = (root / CMAKE_FILE).read_text()
     if MARKER in cmake:
         raise SystemExit("CMake is already patched")
@@ -95,6 +97,12 @@ if(DOTNET_PAL_ROOT)
   # The adapters use C++17 inline variables and lock-free atomic traits.
   set(CMAKE_CXX_STANDARD 17)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
+  # Qualification builds executables with TLS allocated at initial load, not
+  # arbitrary late-loaded DSOs. Keep that restriction an explicit build profile.
+  if(DOTNET_PAL_STATIC_TLS)
+    add_definitions(-DDOTNET_PAL_STATIC_TLS=1)
+    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-ftls-model=initial-exec>")
+  endif()
   add_definitions(-DDOTNET_PAL_GC_VM=1 -DDOTNET_PAL_KERNEL=1 -DDOTNET_PAL_RUNTIME=1 -DDOTNET_PAL_NATIVE_CONTEXT=1 -DDOTNET_PAL_SUPPORT=1
                   -DDOTNET_PAL_TOPOLOGY=1 -DDOTNET_PAL_PROCESS=1 -DDOTNET_PAL_IMAGE=1 -DDOTNET_PAL_MINIPAL=1)
   include_directories("${DOTNET_PAL_ROOT}/include" "${DOTNET_PAL_ROOT}/native")

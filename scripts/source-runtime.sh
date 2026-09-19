@@ -12,7 +12,7 @@ python3 integration/dotnet10/patch_runtime.py "$runtime" --check
 python3 integration/dotnet10/patch_runtime.py "$runtime"
 bash scripts/unwind-cache.sh "$runtime"
 if ! "$runtime/src/coreclr/build-runtime.sh" -release -arch "$arch" -component nativeaot -ninja \
-  -cmakeargs "-DDOTNET_PAL_ROOT=$root" > artifacts/source-build.log 2>&1; then
+  -cmakeargs "-DDOTNET_PAL_ROOT=$root -DDOTNET_PAL_STATIC_TLS=ON" > artifacts/source-build.log 2>&1; then
   tail -n 100 artifacts/source-build.log; exit 1
 fi
 tail -n 12 artifacts/source-build.log
@@ -71,7 +71,7 @@ for profile in workstation server; do
   [[ "$profile" != server ]] || collector=ServerGC
   # The strict gate: the rebuilt runtime and minipal archives reference only the
   # boundary and the reviewed non-OS contracts (integration/dotnet10/reviewed_references.json).
-  python3 scripts/audit_dependencies.py --require-isolated --forbid-runtime-symbol pthread_self \
+  python3 scripts/audit_dependencies.py --require-isolated --forbid-runtime-symbol pthread_self --forbid-runtime-symbol __tls_get_addr \
     --runtime "$overlay/libRuntime.$collector.a" --runtime "$overlay/libaotminipal.a" --pal target/release/libdotnet_pal_rs.a \
     --binary "artifacts/qualification/$profile-linux/GcProbe" \
     --output "artifacts/qualification/$profile-linux/dependency-inventory.log"

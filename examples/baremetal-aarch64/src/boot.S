@@ -76,7 +76,8 @@ _start:
 //   [0x0000_0000, 0x4000_0000)  a level-2 table of 2 MiB blocks:
 //       [0x0000_0000, 0x0020_0000)  invalid: a null dereference faults
 //       [0x0020_0000, 0x4000_0000)  Device-nGnRnE, execute never  (PL011 UART, GIC)
-//   [0x4000_0000, 0x8000_0000)  Normal write-back cacheable   (RAM, -m 1024)
+//   [0x4000_0000, 0x8000_0000)  a level-2 table and 512 level-3 tables:
+//       Normal write-back cacheable 4 KiB pages (RAM, -m 1024).
 // Everything else stays invalid, so a stray access faults instead of reading
 // an unmapped device.
 .globl pal_mmu_enable
@@ -98,10 +99,35 @@ pal_mmu_enable:
     add     x0, x0, :lo12:pal_level1_table
     orr     x1, x3, #3                      // table descriptor
     str     x1, [x0]
-    mov     x1, #0x40000000
-    movz    x2, #0x0705                     // block, AF=1, SH=inner, AttrIndx=1
-    orr     x1, x1, x2
+    // RAM uses page descriptors, not one 1 GiB block. The memory provider can
+    // revoke or protect one 4 KiB page without changing its neighbours.
+    adrp    x3, pal_ram_level2_table
+    add     x3, x3, :lo12:pal_ram_level2_table
+    orr     x1, x3, #3
     str     x1, [x0, #8]
+    adrp    x4, pal_ram_pages
+    add     x4, x4, :lo12:pal_ram_pages
+    mov     x2, #0
+.Lram_tables:
+    add     x1, x4, x2, lsl #12
+    orr     x1, x1, #3
+    str     x1, [x3, x2, lsl #3]
+    add     x2, x2, #1
+    cmp     x2, #512
+    b.lo    .Lram_tables
+
+    mov     x2, #0
+    mov     x5, #0x40000000
+    movz    x6, #0x0707                     // page, AF=1, inner-shareable, AttrIndx=1
+    orr     x6, x6, #(1 << 54)              // UXN; EL1 may execute the boot image
+    mov     x7, #0x40000                    // 262144 pages cover 1 GiB
+.Lram_pages:
+    add     x1, x5, x2, lsl #12
+    orr     x1, x1, x6
+    str     x1, [x4, x2, lsl #3]
+    add     x2, x2, #1
+    cmp     x2, x7
+    b.lo    .Lram_pages
 
     mov     x1, #0xff00                     // MAIR: attr0 Device-nGnRnE, attr1 Normal WB RW-alloc
     msr     mair_el1, x1
@@ -273,6 +299,11 @@ pal_level1_table:
     .space 4096
 pal_level2_table:
     .space 4096
+pal_ram_level2_table:
+    .space 4096
+.globl pal_ram_pages
+pal_ram_pages:
+    .space 512 * 4096                      // 512 level-3 tables, one per 2 MiB
 
 // The linker script needs a .tdata and a .tbss to exist to compute the TLS
 // layout, and the boot code needs them even when no thread-local variable is

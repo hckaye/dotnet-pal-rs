@@ -45,3 +45,12 @@ class DependencyInventoryTests(unittest.TestCase):
                   'unresolved_strong': [{'symbol': 'helper', 'category': 'other-needs-review', 'owners': ['b[2.o]']}, {'symbol': 'mmap', 'category': 'memory-and-native-allocator', 'owners': ['b[2.o]']}], 'unresolved_weak': {}}
         merged = audit.merge([first, second])
         self.assertEqual([i['symbol'] for i in merged['unresolved_strong']], ['mmap'])
+
+    def test_vxsort_isa_contract_is_exact_and_owner_scoped(self):
+        reviewed = audit.load_reviewed()
+        for name in ('_Z25IsSupportedInstructionSet14InstructionSet', '_Z27InitSupportedInstructionSeti'):
+            for owner in ('runtime.a[gcwks.cpp.o]', 'runtime.a[gcsvr.cpp.o]'):
+                self.assertEqual(audit.reviewed_category(name, [owner], reviewed), 'vxsort-isa-contract')
+            self.assertIsNone(audit.reviewed_category(name, ['runtime.a[unknown.cpp.o]'], reviewed))
+            self.assertIsNone(audit.reviewed_category(name + '_unexpected', ['runtime.a[gcwks.cpp.o]'], reviewed))
+        self.assertIsNone(audit.reviewed_category('__tls_get_addr', ['runtime.a[AllocFast.S.o]'], reviewed))

@@ -3,6 +3,13 @@
 use dotnet_pal_rs::{kernel, runtime, services, support, CAP_LINEAR, CAP_VM, INVALID_ARGUMENT, OK, UNSUPPORTED};
 use std::{ffi::c_void, ptr, sync::atomic::{AtomicUsize, Ordering}};
 
+// A child temporarily inherits all open file descriptions between fork/clone
+// and exec, even for CLOEXEC descriptors. Do not overlap process creation with
+// tests that require close() to close the LAST description holding a file lock.
+// Only independent test scheduling is serialized; the lock test's own waiting
+// thread and the fault test's worker thread remain concurrent.
+static PROCESS_CREATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn api() -> &'static dotnet_pal_rs::Api {
     let api = dotnet_pal_std::api();
     assert!(!api.is_null());
@@ -608,6 +615,7 @@ mod files_table {
 
     #[test]
     fn files_change_attributes_link_and_lock() {
+        let _process_creation = super::PROCESS_CREATION.lock().unwrap_or_else(|e| e.into_inner());
         let f = ops();
         let before = stats();
         let unique = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
@@ -935,6 +943,7 @@ mod faults_table {
     /// often its handler ran then. Not a fork: on macOS the child side of a fork from a process with other threads was seen to die inside
     /// fork itself, in libSystem's atfork handler, on an os_once another thread was in the middle of.
     fn dies(mode: u32) -> (Option<i32>, usize) {
+        let _process_creation = super::PROCESS_CREATION.lock().unwrap_or_else(|e| e.into_inner());
         use std::os::unix::process::ExitStatusExt;
         let output = std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact", NAME, "--test-threads=1"]).env(CHILD, mode.to_string()).output().unwrap();
         (output.status.signal(), output.stderr.windows(CALLED.len()).filter(|window| *window == CALLED).count())

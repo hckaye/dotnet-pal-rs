@@ -120,8 +120,7 @@ impl port::Image for Baremetal {
         })
     }
     unsafe fn readable(address: usize, size: usize) -> Result<bool> {
-        let end = address.checked_add(size).ok_or(Error::InvalidArgument)?;
-        Ok(RAM.contains(&address) && end <= RAM.end)
+        memory::readable(address, size)
     }
     unsafe fn build_id(_: usize, _: *mut u8, _: usize) -> Result<usize> { Err(Error::NotFound) }
 }
@@ -189,8 +188,9 @@ pub fn backtrace() {
     unsafe { core::arch::asm!("mov {}, x29", out(reg) frame, options(nomem, nostack)) };
     uart::write(b"[pal] backtrace:");
     for _ in 0..24 {
-        if !RAM.contains(&frame) || frame % 8 != 0 { break; }
-        // SAFETY: a frame pointer inside RAM points at a saved (fp, lr) pair.
+        if !RAM.contains(&frame) || frame % 8 != 0
+            || !memory::readable(frame, 2 * core::mem::size_of::<usize>()).unwrap_or(false) { break; }
+        // SAFETY: the checked pages hold a readable, aligned (fp, lr) pair.
         let (next, link) = unsafe { ((frame as *const usize).read(), (frame as *const usize).add(1).read()) };
         uart::write(b" ");
         uart::write_hex(link as u64);

@@ -1,0 +1,42 @@
+name: file-lock-regression
+on:
+  pull_request:
+    paths:
+      - 'crates/dotnet-pal-std/**'
+      - '.github/workflows/lock-regression.yml'
+permissions:
+  contents: read
+jobs:
+  repeated-table:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal
+          rustup override set 1.98.1
+      - name: Descriptor inheritance regression and repeated parallel table tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/lock-regression
+          cargo test -p dotnet-pal-std --test lock_inheritance -- --nocapture 2>&1 | tee artifacts/lock-regression/inheritance.log
+          for round in $(seq 1 20); do
+            log="artifacts/lock-regression/table-$round.log"
+            cargo test -p dotnet-pal-std --test table -- --test-threads=16 > "$log" 2>&1 || { cat "$log"; exit 1; }
+            echo "parallel table round $round/20 passed"
+            tail -n 3 "$log"
+          done
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: file-lock-regression-${{ matrix.runner }}
+          path: artifacts/lock-regression/
+          if-no-files-found: error
