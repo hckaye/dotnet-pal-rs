@@ -40,7 +40,7 @@ jobs:
               text = text.replace(signature, signature + '        let _process_creation = super::PROCESS_CREATION.lock().unwrap_or_else(|e| e.into_inner());\n', 1)
           p.write_text(text)
           PY
-          test "$(git hash-object "$path")" = caf1f16e48b63d5b312e1c43446b391c1c628d12
+          test "$(git hash-object "$path")" = caf1f16656c84de84d2a91ab47353264bbfaf765
           git diff --check
           git add -- "$path"
           git -c user.name='hckaye' -c user.email='hckaye@users.noreply.github.com' commit -m 'Serialize descriptor-sensitive tests with child creation'
