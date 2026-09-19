@@ -87,7 +87,7 @@ jobs:
         if: ${{ !cancelled() && steps.boundary.outcome == 'success' }}
         run: |
           rustup target add aarch64-unknown-none
-          cargo rustc --lib --crate-type staticlib --release --no-default-features --features host --target aarch64-unknown-none
+          cargo rustc -p dotnet-pal-standalone --lib --crate-type staticlib --release --no-default-features --features host --target aarch64-unknown-none
       - uses: actions/checkout@v4
         if: ${{ !cancelled() && steps.boundary.outcome == 'success' }}
         with:
@@ -188,7 +188,7 @@ jobs:
           for target in aarch64-unknown-none riscv64gc-unknown-none-elf thumbv7em-none-eabi; do
             rustup target add "$target"
             for profile in host host-services host-kernel host-support linear-heap; do
-              cargo rustc --lib --crate-type staticlib --release --no-default-features --features "$profile" --target "$target"
+              cargo rustc -p dotnet-pal-standalone --lib --crate-type staticlib --release --no-default-features --features "$profile" --target "$target"
             done
           done
       - name: Bare-metal AArch64 port table test under QEMU
@@ -246,7 +246,7 @@ jobs:
         run: DOTNET_PAL_RUNTIME_SOURCE=artifacts/runtime-source python3 -m unittest tests.test_system_native_abi
       - name: Freestanding C runtime self-test against glibc
         if: ${{ matrix.runner == 'ubuntu-24.04-arm' }}
-        run: bash native/freestanding/selftest.sh
+        run: bash crates/dotnet-pal-build/native/freestanding/selftest.sh
       - name: Bare-metal AArch64 managed image under QEMU
         if: ${{ matrix.runner == 'ubuntu-24.04-arm' }}
         run: |

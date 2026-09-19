@@ -174,7 +174,7 @@ impl port::Streams for Baremetal {
     fn is_terminal(_: u32) -> Result<bool> { Ok(true) }
 }
 
-/// The freestanding C runtime's exit hooks (native/freestanding/crt.c).
+/// The freestanding C runtime's exit hooks (crates/dotnet-pal-build/native/freestanding/crt.c).
 #[no_mangle]
 pub extern "C" fn dotnet_pal_freestanding_abort() -> ! {
     uart::write(b"ABORT\n");

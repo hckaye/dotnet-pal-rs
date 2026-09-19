@@ -60,7 +60,7 @@ if(NOT CLR_CMAKE_TARGET_WASI OR NOT CLR_CMAKE_TARGET_ARCH_WASM OR NOT DOTNET_PAL
 endif()
 set(CMAKE_CXX_STANDARD 17)
 add_definitions(-DDOTNET_PAL_LLVM_LINEAR=1)
-include_directories("${DOTNET_PAL_ROOT}/include" "${DOTNET_PAL_ROOT}/native")
+include_directories("${DOTNET_PAL_ROOT}/include" "${DOTNET_PAL_ROOT}/crates/dotnet-pal-build/native")
 
 ''' + cmake
     if gen.count('/share/cmake/wasi-sdk-p2.cmake') != 1:

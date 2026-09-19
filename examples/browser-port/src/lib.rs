@@ -72,11 +72,11 @@ impl port::Diagnostics for Browser {
 }
 
 #[cfg(all(feature = "arena", not(feature = "grow"), not(feature = "heap")))]
-type Storage = dotnet_pal_rs::storage::Arena;
+type Storage = dotnet_pal_storage::Arena;
 #[cfg(all(feature = "grow", not(feature = "heap")))]
-type Storage = dotnet_pal_rs::storage::Ledger<dotnet_pal_rs::storage::Grow>;
+type Storage = dotnet_pal_storage::Ledger<dotnet_pal_wasm::Grow>;
 #[cfg(feature = "heap")]
-type Storage = dotnet_pal_rs::storage::Ledger<dotnet_pal_rs::storage::Hooks>;
+type Storage = dotnet_pal_storage::Ledger<dotnet_pal_storage::Hooks>;
 
 dotnet_pal_rs::define_pal! {
     Linear = Storage,

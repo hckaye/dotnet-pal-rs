@@ -30,7 +30,7 @@
     <DefineConstants Condition="$(ProbeExpect.Contains('spawnas'))">$(DefineConstants);EXPECT_SPAWN_AS</DefineConstants>
     <DefineConstants Condition="$(ProbeExpect.Contains('baremetal'))">$(DefineConstants);EXPECT_BAREMETAL</DefineConstants>
     <PalRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))</PalRoot>
-    <PalLib Condition="'$(PalLib)' == ''">$(PalRoot)/target/release/libdotnet_pal_rs.a</PalLib>
+    <PalLib Condition="'$(PalLib)' == ''">$(PalRoot)/target/release/libdotnet_pal_standalone.a</PalLib>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>

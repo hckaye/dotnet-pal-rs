@@ -20,7 +20,7 @@ rm -rf "$framework"; mkdir -p "$framework"
 cp -as "$native_dir/." "$framework/"
 rm "$framework/libSystem.Native.a"
 cp artifacts/system-native/libSystem.Native.a "$framework/libSystem.Native.a"
-cargo rustc --lib --crate-type staticlib --release --features linux
+cargo rustc -p dotnet-pal-standalone --lib --crate-type staticlib --release --features linux
 rm -rf samples/SystemProbe/obj samples/SystemProbe/bin
 dotnet publish samples/SystemProbe/SystemProbe.csproj -c Release -r "$rid" '-p:ProbeExpect=system%3Bprocesses%3Bnotifications%3Blinks%3Bmodules%3Baccounts%3Bpriority%3Bspawnas' \
   "-p:IlcSdkPath=$overlay/" "-p:IlcFrameworkNativePath=$framework/" \
@@ -43,6 +43,6 @@ for needed in ('SystemNative_GetEnviron', 'SystemNative_ForkAndExecProcess', 'Sy
     if needed not in providers: raise SystemExit(needed + ' is not in the image: the probe no longer reaches it')
 PY
 python3 scripts/audit_dependencies.py --runtime "$overlay/libRuntime.WorkstationGC.a" --runtime "$overlay/libaotminipal.a" \
-  --runtime artifacts/system-native/libSystem.Native.a --pal target/release/libdotnet_pal_rs.a \
+  --runtime artifacts/system-native/libSystem.Native.a --pal target/release/libdotnet_pal_standalone.a \
   --binary artifacts/system-probe/SystemProbe --output artifacts/system-probe/dependency-inventory.log --require-isolated
 echo "SYSTEM PROBE PASS rid=$rid: processes, signals, system facts and the optional file operations of the BCL reach the OS only through the boundary"

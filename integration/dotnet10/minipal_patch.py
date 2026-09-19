@@ -1,7 +1,7 @@
 """Route the OS calls of minipal (the runtime's small platform helper library)
 through the PAL: clock, thread id, debugger presence, entropy, log output,
 mutexes, CPU count and CPU feature words. minipal is C, so the front end is the
-C header native/minipal_pal_adapter.h. The rebuilt libaotminipal.a is audited
+C header crates/dotnet-pal-build/native/minipal_pal_adapter.h. The rebuilt libaotminipal.a is audited
 with the runtime archive.
 """
 from kernel_patch import once

@@ -34,7 +34,7 @@ mkdir -p "$out"
 cargo build --manifest-path Cargo.toml --target aarch64-unknown-none --release ${PAL_TRACE:+--features trace}
 
 # 2. The freestanding C runtime contract (string, formatting, heap over the boundary, C++ ABI).
-free="$root/native/freestanding"
+free="$root/crates/dotnet-pal-build/native/freestanding"
 common=(--target=aarch64-unknown-none-elf -ffreestanding -fno-builtin -nostdlib -O2 -Wall -Wextra -Werror "-I$root/include" "-I$free")
 objects=()
 for unit in string strtol printf scanf crt heap; do
@@ -48,14 +48,14 @@ rm -f "$out/libfreestanding.a"; "$ar" rcs "$out/libfreestanding.a" "${objects[@]
 native=()
 for unit in pal io net sys proc; do
   "$clang" -std=c11 -O2 -ffunction-sections -fdata-sections -fno-stack-protector -mno-outline-atomics -Wall -Wextra -Werror \
-    "-I$root/include" "-I$root/native" -c "$root/native/system_native_$unit.c" -o "$out/system_native_$unit.o"
+    "-I$root/include" "-I$root/crates/dotnet-pal-build/native" -c "$root/crates/dotnet-pal-build/native/system_native_$unit.c" -o "$out/system_native_$unit.o"
   native+=("$out/system_native_$unit.o")
 done
 rm -f "$out/libSystem.Native.a"; "$ar" rcs "$out/libSystem.Native.a" "${native[@]}"
 
 # 4. The managed program compiled by ILCompiler for linux-arm64. The publish also
 #    links a Linux executable we do not use; the object is what the image needs.
-(cd "$root" && cargo rustc --lib --crate-type staticlib --release --features linux >/dev/null)
+(cd "$root" && cargo rustc -p dotnet-pal-standalone --lib --crate-type staticlib --release --features linux >/dev/null)
 framework="$out/native-overlay"
 native_dir=$(dirname "$(readlink -f "$sdk/libSystem.Globalization.Native.a")")
 rm -rf "$framework"; mkdir -p "$framework"; cp -as "$native_dir/." "$framework/"

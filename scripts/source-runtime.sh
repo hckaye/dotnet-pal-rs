@@ -46,13 +46,13 @@ manifest = {"runtime_revision": revision, "adapter": "dotnet-pal-gc-vm-v2",
 Path("artifacts/source-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 PYMANIFEST
 clang++ -std=c++17 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
-  -DDOTNET_PAL_OBSERVER_ONLY -Iinclude -Inative -c integration/dotnet10/gc_wrap.cpp -o artifacts/gc_observer.o
-cargo rustc --lib --crate-type staticlib --release --no-default-features --features host-context,host-support,host-topology,host-process,host-image,host-streams --target-dir target/host-kernel
+  -DDOTNET_PAL_OBSERVER_ONLY -Iinclude -Icrates/dotnet-pal-build/native -c crates/dotnet-pal-build/integration/dotnet10/gc_wrap.cpp -o artifacts/gc_observer.o
+cargo rustc -p dotnet-pal-standalone --lib --crate-type staticlib --release --no-default-features --features host-context,host-support,host-topology,host-process,host-image,host-streams --target-dir target/host-kernel
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/services_host.c -o artifacts/services_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/kernel_host.c -o artifacts/kernel_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/runtime_host.c -o artifacts/runtime_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/context_host.c -o artifacts/context_host.o
-clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c native/support_posix.c -o artifacts/support_host.o
+clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c crates/dotnet-pal-posix/native/support_posix.c -o artifacts/support_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/topology_host.c -o artifacts/topology_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/process_host.c -o artifacts/process_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/image_host.c -o artifacts/image_host.o
@@ -72,7 +72,7 @@ for profile in workstation server; do
   # The strict gate: the rebuilt runtime and minipal archives reference only the
   # boundary and the reviewed non-OS contracts (integration/dotnet10/reviewed_references.json).
   python3 scripts/audit_dependencies.py --require-isolated --forbid-runtime-symbol pthread_self --forbid-runtime-symbol __tls_get_addr \
-    --runtime "$overlay/libRuntime.$collector.a" --runtime "$overlay/libaotminipal.a" --pal target/release/libdotnet_pal_rs.a \
+    --runtime "$overlay/libRuntime.$collector.a" --runtime "$overlay/libaotminipal.a" --pal target/release/libdotnet_pal_standalone.a \
     --binary "artifacts/qualification/$profile-linux/GcProbe" \
     --output "artifacts/qualification/$profile-linux/dependency-inventory.log"
 done

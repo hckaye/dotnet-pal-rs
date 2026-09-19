@@ -9,19 +9,19 @@ exec > >(tee artifacts/llvm/driver.log) 2>&1
 : "${NUGET_PACKAGES:?provide an isolated package cache}"
 export MSBuildEnableWorkloadResolver=false
 project=samples/LlvmGcProbe/LlvmGcProbe.csproj
-cargo rustc --lib --crate-type staticlib --release --no-default-features --features linear-gc-small,wasi-runtime --target wasm32-wasip1
+cargo rustc -p dotnet-pal-standalone --lib --crate-type staticlib --release --no-default-features --features linear-gc-small,wasi-runtime --target wasm32-wasip1
 cc="$WASI_SDK_PATH/bin/clang"; cxx="$WASI_SDK_PATH/bin/clang++"
 # This PURE formatter must use the P2 SDK's error constants, matching the published
 # System.Native archive. It performs no OS calls or P2 imports. The P1 SDK has no
 # netdb.h. The final module's import audit still rejects every non-P1 dependency.
-"$cc" --target=wasm32-unknown-wasip2 -std=c11 -O2 -Wall -Wextra -Werror -c integration/llvm-wasi/p1_error_text.c -o artifacts/llvm/p1_error_text.o
-"$cc" --target=wasm32-unknown-wasip1 -std=c11 -O2 -Wall -Wextra -Werror -Iinclude -c native/minipal_entropy_adapter.c -o artifacts/llvm/minipal_entropy.o
+"$cc" --target=wasm32-unknown-wasip2 -std=c11 -O2 -Wall -Wextra -Werror -c crates/dotnet-pal-build/integration/llvm-wasi/p1_error_text.c -o artifacts/llvm/p1_error_text.o
+"$cc" --target=wasm32-unknown-wasip1 -std=c11 -O2 -Wall -Wextra -Werror -Iinclude -c crates/dotnet-pal-build/native/minipal_entropy_adapter.c -o artifacts/llvm/minipal_entropy.o
 for mode in baseline wrapped; do
   extra=()
   [[ "$mode" != baseline ]] || extra=(-DDOTNET_PAL_OBSERVER_ONLY)
   "$cxx" --target=wasm32-unknown-wasip1 -std=c++17 -O2 -fno-exceptions -fno-rtti \
-    -ffunction-sections -fdata-sections -Wall -Wextra -Werror -Iinclude -Inative \
-    "${extra[@]}" -c integration/llvm-wasi/gc_linear_wrap.cpp -o "artifacts/llvm/$mode.o"
+    -ffunction-sections -fdata-sections -Wall -Wextra -Werror -Iinclude -Icrates/dotnet-pal-build/native \
+    "${extra[@]}" -c crates/dotnet-pal-build/integration/llvm-wasi/gc_linear_wrap.cpp -o "artifacts/llvm/$mode.o"
 done
 python3 integration/llvm-wasi/symbols.py --wrapper artifacts/llvm/wrapped.o --props artifacts/llvm/wrap.props --nm "$WASI_SDK_PATH/bin/llvm-nm"
 dotnet restore "$project" -r wasi-wasm

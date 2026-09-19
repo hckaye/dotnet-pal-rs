@@ -1,0 +1,16 @@
+[package]
+name = "dotnet-pal-linux"
+version = "0.7.0"
+edition = "2021"
+rust-version = "1.98"
+description = "Linux no_std PAL providers"
+license = "MIT"
+repository = "https://github.com/hckaye/dotnet-pal-rs"
+include = ["src/**", "Cargo.toml", "README.md", "LICENSE", "native/**"]
+
+[features]
+default = []
+entry = []
+[dependencies]
+dotnet-pal-rs = { version = "0.7.0", path = "../..", default-features = false }
+libc = { version = "=0.2.169", default-features = false }

@@ -1,0 +1,41 @@
+name: crate-boundaries
+on:
+  pull_request:
+  push:
+    branches: [main, refactor/platform-crates]
+permissions:
+  contents: read
+jobs:
+  downstream:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain and dependency cache
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal
+          rustup override set 1.98.1
+          cargo fetch --locked
+      - name: Independent consumers, graph isolation and relocated package assets
+        run: |
+          python3 -m unittest tests.test_crate_boundaries -v
+          python3 scripts/check-crate-boundaries.py
+          cargo check -p dotnet-pal-host --all-features
+          cargo rustc -p dotnet-pal-linux --lib --crate-type staticlib --release --features entry
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal
+          rustup override set 1.98.1
+      - name: Compile the independent macOS port and compatibility callers
+        run: |
+          cargo check -p dotnet-pal-macos --all-features
+          cargo test -p dotnet-pal-std --no-run

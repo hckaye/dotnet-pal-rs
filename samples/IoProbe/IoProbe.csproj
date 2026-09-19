@@ -21,7 +21,7 @@
     <DefineConstants Condition="$(ProbeExpect.Contains('files'))">$(DefineConstants);EXPECT_FILES</DefineConstants>
     <DefineConstants Condition="$(ProbeExpect.Contains('sockets'))">$(DefineConstants);EXPECT_SOCKETS</DefineConstants>
     <PalRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))</PalRoot>
-    <PalLib Condition="'$(PalLib)' == ''">$(PalRoot)/target/release/libdotnet_pal_rs.a</PalLib>
+    <PalLib Condition="'$(PalLib)' == ''">$(PalRoot)/target/release/libdotnet_pal_standalone.a</PalLib>
   </PropertyGroup>
   <ItemGroup>
     <!-- The SDK lists the boundary archive first; naming its entry point undefined up front

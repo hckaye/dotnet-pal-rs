@@ -12,7 +12,7 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
     <PalRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))</PalRoot>
-    <PalLib Condition="'$(PalLib)' == ''">$(PalRoot)/target/release/libdotnet_pal_rs.a</PalLib>
+    <PalLib Condition="'$(PalLib)' == ''">$(PalRoot)/target/release/libdotnet_pal_standalone.a</PalLib>
     <PalObserverObject Condition="'$(PalObserverObject)' == ''">$(PalRoot)/artifacts/gc_wrap.o</PalObserverObject>
     <PalWrap Condition="'$(PalWrap)' == ''">true</PalWrap>
   </PropertyGroup>

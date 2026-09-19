@@ -19,7 +19,7 @@ Both I/O groups report conditions with the boundary's own status codes
 `NOT_DIRECTORY`, `NOT_EMPTY`, `NO_SPACE`, `WOULD_BLOCK`, `BROKEN_PIPE`,
 `CONNECTION_REFUSED`, `CONNECTION_RESET`, `IN_PROGRESS` and the rest of the list in
 `include/dotnet_pal.h`). In Rust they are variants of `port::Error`. A provider never
-sees or produces an errno value: `native/system_native_io.c` maps each status to the
+sees or produces an errno value: `crates/dotnet-pal-build/native/system_native_io.c` maps each status to the
 Linux errno the managed side expects. The front ends hold every call to the set of
 statuses its group defines, so a provider that returns anything else is reported as
 `OS_ERROR`.
@@ -98,7 +98,7 @@ always the one it was meant for.
 
 The BCL's socket engine expects edge-triggered readiness, as `epoll` with `EPOLLET`
 gives it: one event when a socket becomes ready, and the next only after an operation
-reported that it would block. `native/system_native_net.c` derives that from `poll`
+reported that it would block. `crates/dotnet-pal-build/native/system_native_net.c` derives that from `poll`
 and `wake`. An event port records, per registered socket, which events it has
 delivered, and polls only for the rest. An operation that returns `WOULD_BLOCK` or
 `IN_PROGRESS` clears the delivered mark of its direction and wakes the port's channel,
@@ -155,7 +155,7 @@ below the interrupted stack pointer, so a handler that lowers `sp` writes nothin
 there, except inside a red zone the ABI makes the port skip (128 bytes on x86-64
 System V and in Apple's AArch64 ABI, none in the standard AArch64 one).
 
-The runtime patch (`integration/dotnet10/context_patch.py`, `native/faults_adapter.inl`)
+The runtime patch (`integration/dotnet10/context_patch.py`, `crates/dotnet-pal-build/native/faults_adapter.inl`)
 uses the group when the signal substrate is absent. The adapter converts the frame
 into the runtime's limited context, calls the handler the runtime registers for
 hardware exceptions, and on "continue execution" writes back the control registers and
@@ -170,8 +170,8 @@ leaves the first 2 MiB of the address space unmapped for that reason.
 
 | Provider | Files | Sockets | Faults |
 | --- | --- | --- | --- |
-| Linux backend (`linux` feature) | `src/linux_files.rs` | `src/linux_sockets.rs`: one eventfd per wake channel | absent: Linux delivers faults as signals through `context` |
-| Desktop `std` port | `std::fs` (`crates/dotnet-pal-std/src/files.rs`) | `socket2` (`crates/dotnet-pal-std/src/sockets.rs`): one socket pair per wake channel | SIGSEGV, SIGBUS, SIGFPE, SIGILL and SIGTRAP on Linux and macOS (`crates/dotnet-pal-std/src/faults.rs`); absent on Windows |
+| Linux backend (`linux` feature) | `crates/dotnet-pal-linux/src/linux_files.rs` | `crates/dotnet-pal-linux/src/linux_sockets.rs`: one eventfd per wake channel | absent: Linux delivers faults as signals through `context` |
+| Desktop `std` port | `std::fs` (`crates/dotnet-pal-linux-std/src/files.rs`) | `socket2` (`crates/dotnet-pal-linux-std/src/sockets.rs`): one socket pair per wake channel | SIGSEGV, SIGBUS, SIGFPE, SIGILL and SIGTRAP on Linux and macOS (`crates/dotnet-pal-linux-std/src/faults.rs`); absent on Windows |
 | `crates/dotnet-pal-memfs` | an in-memory file system, `no_std` plus `alloc`, with all eleven optional operations | | |
 | C host tables | `host-files` | `host-sockets` | `host-faults`: the host calls the deliver callback it receives from `enable` |
 | Bare-metal example | `dotnet-pal-memfs` over the port's heap | absent: the machine has no network device | the synchronous exception vector |

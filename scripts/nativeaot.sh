@@ -10,11 +10,11 @@ esac
 [[ "$(dotnet --version)" == 10.0.401 ]] || { echo "Use the pinned SDK 10.0.401" >&2; exit 1; }
 mkdir -p artifacts
 clang++ -std=c++17 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
-  -Iinclude -Inative -c integration/dotnet10/gc_wrap.cpp -o artifacts/gc_wrap.o
+  -Iinclude -Icrates/dotnet-pal-build/native -c crates/dotnet-pal-build/integration/dotnet10/gc_wrap.cpp -o artifacts/gc_wrap.o
 python3 integration/dotnet10/symbols.py --props artifacts/wrap.props
 project=samples/GcProbe/GcProbe.csproj
 dotnet restore "$project" -r "$rid"
-cargo rustc --lib --crate-type staticlib --release --features linux
+cargo rustc -p dotnet-pal-standalone --lib --crate-type staticlib --release --features linux
 export DOTNET_GCServer=0 DOTNET_gcServer=0 DOTNET_GCLargePages=0
 export COMPlus_gcServer=0 COMPlus_GCLargePages=0
 # RhConfig at the pinned NativeAOT revision accepts hex digits, NOT a 0x prefix.
@@ -24,10 +24,10 @@ DOTNET_GCHeapHardLimit=20000000 timeout 120s ./artifacts/baseline/GcProbe baseli
 rm -rf samples/GcProbe/obj/Release samples/GcProbe/bin/Release
 dotnet publish "$project" -r "$rid" -c Release -p:PalWrap=true -o artifacts/wrapped
 DOTNET_GCHeapHardLimit=20000000 timeout 120s ./artifacts/wrapped/GcProbe wrapped
-cargo rustc --lib --crate-type staticlib --release --no-default-features --features host --target-dir target/host
+cargo rustc -p dotnet-pal-standalone --lib --crate-type staticlib --release --no-default-features --features host --target-dir target/host
 cc -std=c11 -O2 -fPIC -Iinclude -c tests/host_backend.c -o artifacts/host_backend.o
 rm -rf samples/GcProbe/obj/Release samples/GcProbe/bin/Release
 dotnet publish "$project" -r "$rid" -c Release -p:PalWrap=true \
-  -p:PalLib="$PWD/target/host/release/libdotnet_pal_rs.a" \
+  -p:PalLib="$PWD/target/host/release/libdotnet_pal_standalone.a" \
   -p:PalHostObject="$PWD/artifacts/host_backend.o" -o artifacts/host-wrapped
 DOTNET_GCHeapHardLimit=20000000 timeout 120s ./artifacts/host-wrapped/GcProbe wrapped

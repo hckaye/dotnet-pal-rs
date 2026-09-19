@@ -13,15 +13,18 @@ crate-type = ["staticlib"]
 [features]
 # The bounded static arena (part of the initial memory).
 default = ["arena"]
-arena = ["dotnet-pal-rs/storage-arena"]
+arena = ["dotnet-pal-storage/storage-arena"]
 # Demand storage from memory.grow; only for modules with no other allocator.
-grow = ["dotnet-pal-rs/storage-grow"]
+grow = ["dep:dotnet-pal-wasm"]
 # Demand storage through the C-heap hooks (posix_memalign): the variant linked
 # with the NativeAOT LLVM runtime and wasi-libc. 64 MiB budget for the GC probe.
-heap = ["dotnet-pal-rs/storage-hooks", "dotnet-pal-rs/linear-gc-small"]
+heap = ["dotnet-pal-build/posix", "dotnet-pal-storage/storage-hooks", "dotnet-pal-storage/linear-gc-small"]
 
 [dependencies]
 dotnet-pal-rs = { path = "../..", default-features = false }
+
+dotnet-pal-storage = { path = "../../crates/dotnet-pal-storage" }
+dotnet-pal-wasm = { path = "../../crates/dotnet-pal-wasm", optional = true }
 
 [build-dependencies]
 dotnet-pal-build = { path = "../../crates/dotnet-pal-build" }

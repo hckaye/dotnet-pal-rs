@@ -56,8 +56,8 @@ the image's build identifier.
 output. `write` never reports zero bytes with success; `read` reports zero bytes with
 success at end of input. It is not a file API.
 
-Providers: the Linux backend (`src/linux_platform.rs`), the desktop `std` port
-(`crates/dotnet-pal-std/src/system.rs`, image inspection on Linux only), C host tables
+Providers: the Linux backend (`crates/dotnet-pal-linux/src/linux_platform.rs`), the desktop `std` port
+(`crates/dotnet-pal-linux-std/src/system.rs`, image inspection on Linux only), C host tables
 under the `host-topology`, `host-process`, `host-image` and `host-streams` features with
 reference providers in `tests/*_host.c`, and the bare-metal example. `scripts/platform.sh`
 runs the conformance tests against the kernel's own answers.
@@ -77,7 +77,7 @@ groups:
 - The unwinder's section lookup, its readability probe and its diagnostic lines use
   `image` and the diagnostics channel; the runtime's build-id lookup uses `image.build_id`.
 - `minipal` (clock, thread id, debugger, entropy, log output, mutexes, CPU count,
-  CPU features) uses the C front end `native/minipal_pal_adapter.h`; the rebuilt
+  CPU features) uses the C front end `crates/dotnet-pal-build/native/minipal_pal_adapter.h`; the rebuilt
   `libaotminipal.a` replaces the SDK's in the source overlay.
 - The thread identity of the GC's `EEThreadId` uses the `runtime` group.
 
@@ -107,23 +107,23 @@ contract, and the Rust Linux backend makes the OS calls the boundary routes.
 
 ## System.Native over the boundary
 
-Five units implement System.Native on the negotiated table. `native/system_native_pal.c`
+Five units implement System.Native on the negotiated table. `crates/dotnet-pal-build/native/system_native_pal.c`
 has the native heap, threads and low-level monitors, clocks, entropy, environment lookup,
-error-code translation and diagnostics. `native/system_native_io.c` has the descriptor
+error-code translation and diagnostics. `crates/dotnet-pal-build/native/system_native_io.c` has the descriptor
 table, the standard streams, files and directories over the `files` group, change watching,
-file mappings and volumes. `native/system_native_net.c` has sockets, readiness events and
+file mappings and volumes. `crates/dotnet-pal-build/native/system_native_net.c` has sockets, readiness events and
 name resolution over the `sockets` group, network interfaces, reverse lookup and
 multicast membership over the `network` group, Unix domain sockets over the
-`local_sockets` group, and packet information over the `packets` group. `native/system_native_sys.c` has the
+`local_sockets` group, and packet information over the `packets` group. `crates/dotnet-pal-build/native/system_native_sys.c` has the
 environment enumeration, OS, user and process facts, accounts, group lists and priorities,
-signal registrations over the `notifications` group, the terminal and module loading. `native/system_native_proc.c` has
+signal registrations over the `notifications` group, the terminal and module loading. `crates/dotnet-pal-build/native/system_native_proc.c` has
 child processes, also under another identity, and their pipes. [io](io.md), [system](system.md) and
 [facilities](facilities.md) describe the groups behind them. The facilities probe links 224
 entry points, all from these units. What the boundary does not carry (sessions, resource limits, raw sockets other than ICMP,
 control messages other than packet information, network change events) reports `ENOTSUP`,
 `ENOENT` or `EAFNOSUPPORT`, so managed code sees an honest failure. Without the `files`
 group no path exists, and without the `sockets` group no address family does.
-`native/system_native_abi.h` pins the enumerations and structure layouts of the audited
+`crates/dotnet-pal-build/native/system_native_abi.h` pins the enumerations and structure layouts of the audited
 runtime commit; `tests/test_system_native_abi.py` compares them with the pinned headers
 when a checkout is available.
 

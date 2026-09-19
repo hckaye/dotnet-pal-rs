@@ -8,6 +8,8 @@ version = "0.7.0"
 dependencies = [
  "dotnet-pal-build",
  "dotnet-pal-rs",
+ "dotnet-pal-storage",
+ "dotnet-pal-wasm",
 ]
 
 [[package]]
@@ -31,6 +33,45 @@ name = "dotnet-pal-build"
 version = "0.7.0"
 dependencies = [
  "cc",
+ "dotnet-pal-posix",
+ "dotnet-pal-rs",
+]
+
+[[package]]
+name = "dotnet-pal-host"
+version = "0.7.0"
+dependencies = [
+ "dotnet-pal-rs",
+]
+
+[[package]]
+name = "dotnet-pal-linux"
+version = "0.7.0"
+dependencies = [
+ "dotnet-pal-rs",
+ "libc",
+]
+
+[[package]]
+name = "dotnet-pal-linux-std"
+version = "0.7.0"
+dependencies = [
+ "dotnet-pal-rs",
+ "dotnet-pal-std-common",
+ "getrandom",
+ "libc",
+ "socket2",
+]
+
+[[package]]
+name = "dotnet-pal-macos"
+version = "0.7.0"
+dependencies = [
+ "dotnet-pal-rs",
+ "dotnet-pal-std-common",
+ "getrandom",
+ "libc",
+ "socket2",
 ]
 
 [[package]]
@@ -41,19 +82,69 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotnet-pal-posix"
+version = "0.7.0"
+
+[[package]]
 name = "dotnet-pal-rs"
 version = "0.7.0"
+
+[[package]]
+name = "dotnet-pal-standalone"
+version = "0.7.0"
 dependencies = [
- "libc",
+ "dotnet-pal-host",
+ "dotnet-pal-linux",
+ "dotnet-pal-rs",
+ "dotnet-pal-storage",
+ "dotnet-pal-wasip1",
+ "dotnet-pal-wasm",
 ]
 
 [[package]]
 name = "dotnet-pal-std"
 version = "0.7.0"
 dependencies = [
+ "dotnet-pal-linux-std",
+ "dotnet-pal-macos",
  "dotnet-pal-rs",
- "getrandom",
+ "dotnet-pal-windows",
  "libc",
+]
+
+[[package]]
+name = "dotnet-pal-std-common"
+version = "0.7.0"
+
+[[package]]
+name = "dotnet-pal-storage"
+version = "0.7.0"
+dependencies = [
+ "dotnet-pal-rs",
+]
+
+[[package]]
+name = "dotnet-pal-wasip1"
+version = "0.7.0"
+dependencies = [
+ "dotnet-pal-rs",
+]
+
+[[package]]
+name = "dotnet-pal-wasm"
+version = "0.7.0"
+dependencies = [
+ "dotnet-pal-rs",
+ "dotnet-pal-storage",
+]
+
+[[package]]
+name = "dotnet-pal-windows"
+version = "0.7.0"
+dependencies = [
+ "dotnet-pal-rs",
+ "dotnet-pal-std-common",
+ "getrandom",
  "socket2",
  "windows-sys 0.60.2",
 ]

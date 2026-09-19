@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #define dotnet_pal_host_support_v2 reference_support_v2
-#include "../native/support_posix.c"
+#include "../crates/dotnet-pal-posix/native/support_posix.c"
 #undef dotnet_pal_host_support_v2
 static int mode;
 static dotnet_pal_host_support table;

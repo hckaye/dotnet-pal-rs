@@ -1,23 +1,17 @@
 # Porting .NET NativeAOT to a new platform with dotnet-pal-rs
 
-A port is a Rust crate that depends on `dotnet-pal-rs`, implements the trait
-for each OS service the platform can provide, and exports the single C entry
-point the runtime calls. The core crate contains no OS code of its own when used
-this way: it validates arguments, sanitizes outputs and counts calls around the
-port's providers, and ships the pure pieces every port reuses (linear storage,
-counters, the WASI transport).
+A port is a Rust crate that depends on `dotnet-pal-rs`, implements service
+traits and exports the negotiated C entry point. Core is always platform-neutral:
+there is no backend feature that changes its dependency graph or adds OS code.
 
 ## Crates
 
-| Crate | Role | `std` |
-| --- | --- | --- |
-| `dotnet-pal-rs` | Boundary traits (`port`), C ABI types, front ends, pure providers (`storage`), optional built-in Linux/host/WASI providers | no |
-| `dotnet-pal-std` | A complete desktop port built on the Rust standard library (Linux, macOS, Windows) | yes |
-| `dotnet-pal-build` | `build.rs` helper: compiles the native adapter objects and writes MSBuild link inputs | yes (build time only) |
-| `examples/browser-port` | A port whose services are JavaScript imports, with a C# application running in a page | no |
-
-`dotnet-pal-std` is a separate crate so that `no_std` ports never pull the
-standard library, `libc` or `getrandom` into their dependency graph.
+[Crate boundaries and migration](crate-boundaries.md) lists all packages and
+examples. Use `dotnet-pal-linux`, `dotnet-pal-linux-std`, `dotnet-pal-macos`,
+`dotnet-pal-windows`, `dotnet-pal-host` or `dotnet-pal-wasip1` only when that provider
+is wanted. `dotnet-pal-std` is a small target-selected compatibility facade.
+Portable storage is in `dotnet-pal-storage`, Wasm growth in `dotnet-pal-wasm`, and
+native adapters are packaged with the build-only `dotnet-pal-build` crate.
 
 ## Writing a port
 
@@ -43,7 +37,7 @@ impl port::Diagnostics for MyPlatform {
 }
 
 dotnet_pal_rs::define_pal! {
-    Linear = dotnet_pal_rs::storage::Arena,   // pure, bounded storage from the core
+    Linear = dotnet_pal_storage::Arena,   // optional dotnet-pal-storage dependency
     Clock = MyPlatform,
     Diagnostics = MyPlatform,
     Abort = MyPlatform,                       // or omit for a trap/spin
@@ -116,7 +110,7 @@ of them needs none of them. See [io](io.md), [system](system.md) and
 ## The BCL native layer and the C runtime
 
 A NativeAOT program also links System.Native, the BCL's native layer.
-Five units implement it on the boundary. `native/system_native_pal.c` has the
+Five units implement it on the boundary. `crates/dotnet-pal-build/native/system_native_pal.c` has the
 native heap, threads, monitors, clocks, entropy, the environment lookup and error
 codes. `system_native_io.c` has descriptors, streams, files and directories,
 change watching, file mappings and volumes. `system_native_net.c` has sockets,
@@ -129,7 +123,7 @@ follow that ABI, and links them in place of the SDK's `libSystem.Native.a`. A
 port without storage hardware can name `dotnet_pal_memfs::MemFs` as its `Files`
 and `Volumes` provider.
 
-A target with no libc links `native/freestanding`, the C runtime contract the
+A target with no libc links `crates/dotnet-pal-build/native/freestanding`, the C runtime contract the
 runtime archives and System.Native need, and defines the two hooks
 `dotnet_pal_freestanding_abort` and `dotnet_pal_freestanding_exit`. The math
 library comes from the port (the bare-metal example exports the pure-Rust `libm`).
@@ -137,7 +131,7 @@ See [platform](platform.md).
 
 ## Storage without an OS
 
-`dotnet_pal_rs::storage` has three providers that need no OS:
+`dotnet-pal-storage` supplies portable providers with no OS dependency:
 
 - `Arena` (feature `storage-arena`): a bounded static arena, reusable, part of
   the initial memory. 8 MiB by default, 64 MiB with `linear-gc-small`, 256 MiB
@@ -145,8 +139,8 @@ See [platform](platform.md).
 - `Ledger<B>`: an ownership ledger with a hard live-byte budget over a
   `Backing` that supplies blocks on demand. `Hooks` (feature `storage-hooks`)
   calls the C hooks `dotnet_pal_storage_allocate_v2`/`release_v2`, which an
-  embedder implements with its allocator (`native/linear_heap_posix.c` uses
-  `posix_memalign`). `Grow` (feature `storage-grow`, wasm32 only) grows the
+  embedder implements with its allocator (`crates/dotnet-pal-posix/native/linear_heap_posix.c` uses
+  `posix_memalign`). `dotnet_pal_wasm::Grow` (a separate wasm32-only package) grows the
   instance memory itself and is only correct when no other allocator shares it.
 
 None of these advertise `CAP_VM`; the native GC adapter refuses them and the
@@ -157,11 +151,11 @@ explicit linear GC adapter accepts them.
 The native side of a port consists of small C/C++ adapters that connect the
 audited runtime sources to the boundary (GC wrappers, entropy for `minipal`,
 storage hooks). `dotnet-pal-build` compiles the ones a port selects, from the
-sources shipped in this repository, into one archive and emits the Cargo link
+sources shipped inside its own package, into one archive and emits the Cargo link
 directives:
 
 ```rust
-// build.rs of a port crate
+// build.rs; this example requires dotnet-pal-build features = ["posix"]
 fn main() {
     let artifacts = dotnet_pal_build::Build::new()
         .target(dotnet_pal_build::Target::Wasm32Wasip1)
@@ -186,26 +180,34 @@ environment variables (`CC_wasm32-wasip1` and friends), which a port's
 
 ## The desktop port
 
-`dotnet-pal-std` implements every provider a desktop OS can supply. Its
+`dotnet-pal-std` selects the current OS implementation; its
 integration test exercises the negotiated C table on whatever host runs
 `cargo test -p dotnet-pal-std`: reserve/commit/zero-recommit, sleep and clocks,
 events with timeouts, recursive mutexes, threads, thread-local destructors,
 stack bounds, environment, entropy, native mappings, module inspection, the
 helper heap, reader/writer locks and diagnostics. With the `entry` feature the
 crate exports `dotnet_pal_get_api` and links into a NativeAOT runtime build the
-same way the Linux reference configuration does. The Windows providers compile
-(`cargo check --target x86_64-pc-windows-gnu`) but have not been executed here.
+same way the Linux reference configuration does. The repository CI checks the concrete OS providers and the facade together;
+inspect the results for the exact commit before treating a target as qualified.
 
 ## Standalone configurations
 
-The `linux`, `host*`, `linear*` and `wasi*` features of the core assemble a
-static library from built-in providers and export the entry point themselves;
+The `linux`, `host*`, `linear*` and `wasi*` features of `tools/dotnet-pal-standalone` assemble a
+static library from separate provider dependencies and export the entry point themselves;
 they exist for the qualification scripts and for C/C++ SDK providers that supply
 the `dotnet_pal_host_*_v2` tables. Build them with an explicit crate type:
 
 ```sh
-cargo rustc --lib --crate-type staticlib --release --features linux
-cargo rustc --lib --crate-type staticlib --release --no-default-features --features linear --target wasm32-unknown-unknown
+cargo rustc -p dotnet-pal-standalone --lib --crate-type staticlib --release --features linux
+cargo rustc -p dotnet-pal-standalone --lib --crate-type staticlib --release --no-default-features --features linear --target wasm32-unknown-unknown
 ```
 
 A library consumer enables none of these features.
+
+## Migrating old root-crate features
+
+The core no longer accepts `linux`, `host-*`, `linear-*`, `storage-*`, or `wasi-*`
+features. Select the owning package explicitly; see [the migration table](crate-boundaries.md).
+The old names remain only on the unpublished repository qualification assembler.
+Its archive is `libdotnet_pal_standalone.a`. They are not a supported way for a
+consumer to select platforms through the core.

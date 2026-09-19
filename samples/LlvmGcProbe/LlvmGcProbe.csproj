@@ -8,7 +8,7 @@
     <IlcLlvmExceptionHandlingModel>emulated</IlcLlvmExceptionHandlingModel>
     <IlcTreatWarningsAsErrors>true</IlcTreatWarningsAsErrors>
     <PalRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))</PalRoot>
-    <PalLib Condition="'$(PalLib)' == ''">$(PalRoot)/target/wasm32-wasip1/release/libdotnet_pal_rs.a</PalLib>
+    <PalLib Condition="'$(PalLib)' == ''">$(PalRoot)/target/wasm32-wasip1/release/libdotnet_pal_standalone.a</PalLib>
     <PalWrap Condition="'$(PalWrap)' == ''">false</PalWrap>
   </PropertyGroup>
   <ItemGroup>

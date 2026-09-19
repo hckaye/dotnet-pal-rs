@@ -18,7 +18,7 @@ rm -rf "$framework"; mkdir -p "$framework"
 cp -as "$native_dir/." "$framework/"
 rm "$framework/libSystem.Native.a"
 cp artifacts/system-native/libSystem.Native.a "$framework/libSystem.Native.a"
-cargo rustc --lib --crate-type staticlib --release --features linux
+cargo rustc -p dotnet-pal-standalone --lib --crate-type staticlib --release --features linux
 rm -rf samples/ConsoleProbe/obj samples/ConsoleProbe/bin
 dotnet publish samples/ConsoleProbe/ConsoleProbe.csproj -c Release -r "$rid" \
   "-p:IlcSdkPath=$overlay/" "-p:IlcFrameworkNativePath=$framework/" \
@@ -39,6 +39,6 @@ print(f"SystemNative symbols linked: {len(providers)}; from the boundary objects
 if foreign: raise SystemExit('SystemNative symbols not provided by native/system_native_*.c: ' + ', '.join(foreign))
 PY
 python3 scripts/audit_dependencies.py --runtime "$overlay/libRuntime.WorkstationGC.a" --runtime "$overlay/libaotminipal.a" \
-  --runtime artifacts/system-native/libSystem.Native.a --pal target/release/libdotnet_pal_rs.a \
+  --runtime artifacts/system-native/libSystem.Native.a --pal target/release/libdotnet_pal_standalone.a \
   --binary artifacts/console-probe/ConsoleProbe --output artifacts/console-probe/dependency-inventory.log --require-isolated
 echo "CONSOLE PROBE PASS rid=$rid: runtime, minipal and System.Native all reach the OS only through the boundary"

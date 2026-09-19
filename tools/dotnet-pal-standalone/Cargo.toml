@@ -1,0 +1,77 @@
+[package]
+name = "dotnet-pal-standalone"
+version = "0.7.0"
+edition = "2021"
+rust-version = "1.98"
+description = "Repository qualification configurations (not a consumer library)"
+license = "MIT"
+include = ["src/**", "Cargo.toml", "README.md", "LICENSE", "native/**"]
+publish = false
+
+
+
+[features]
+
+# No backend by default: a library consumer declares its own port with
+# `define_pal!`. The features below assemble standalone static libraries.
+default = []
+linux = ["dep:dotnet-pal-linux"]
+# Virtual memory from an immutable C host table (dotnet_pal_host_v2).
+host = ["dep:dotnet-pal-host"]
+# Additional C host tables. Each requires its provider symbol before startup.
+host-services = ["host", "dotnet-pal-host/host-services"]
+host-kernel = ["host-services", "dotnet-pal-host/host-kernel"]
+host-runtime = ["host-kernel", "dotnet-pal-host/host-runtime"]
+host-context = ["host-runtime", "dotnet-pal-host/host-context"]
+host-support = ["host", "dotnet-pal-host/host-support"]
+host-topology = ["host", "dotnet-pal-host/host-topology"]
+host-process = ["host", "dotnet-pal-host/host-process"]
+host-image = ["host", "dotnet-pal-host/host-image"]
+host-streams = ["host", "dotnet-pal-host/host-streams"]
+host-files = ["host", "dotnet-pal-host/host-files"]
+host-sockets = ["host", "dotnet-pal-host/host-sockets"]
+host-faults = ["host", "dotnet-pal-host/host-faults"]
+host-system = ["host", "dotnet-pal-host/host-system"]
+host-notifications = ["host", "dotnet-pal-host/host-notifications"]
+host-processes = ["host", "dotnet-pal-host/host-processes"]
+host-terminal = ["host", "dotnet-pal-host/host-terminal"]
+host-watches = ["host", "dotnet-pal-host/host-watches"]
+host-mappings = ["host", "dotnet-pal-host/host-mappings"]
+host-volumes = ["host", "dotnet-pal-host/host-volumes"]
+host-network = ["host", "dotnet-pal-host/host-network"]
+host-local-sockets = ["host", "dotnet-pal-host/host-local-sockets"]
+host-accounts = ["host", "dotnet-pal-host/host-accounts"]
+host-priority = ["host", "dotnet-pal-host/host-priority"]
+host-packets = ["host", "dotnet-pal-host/host-packets"]
+host-spawn-as = ["host", "dotnet-pal-host/host-spawn-as"]
+# OS-independent storage providers usable by any port.
+storage-arena = ["dotnet-pal-storage/storage-arena"]
+storage-hooks = ["dotnet-pal-storage/storage-hooks"]
+storage-grow = ["dep:dotnet-pal-wasm"]
+# Standalone linear-storage libraries: the bounded static arena, the embedder
+# hooks (sharing the C heap on WASI), or wasm32 memory.grow for modules with no
+# other allocator.
+linear = ["storage-arena", "dep:dotnet-pal-storage"]
+linear-heap = ["linear", "storage-hooks"]
+linear-grow = ["linear", "storage-grow"]
+# Storage budget selection for managed experiments; the default stays 8 MiB.
+# These only change the capacity constant and select no backend by themselves.
+linear-gc = ["dotnet-pal-storage/linear-gc"]
+# 64 MiB budget for managed OOM qualification; not GCHeapHardLimit (64-bit only).
+linear-gc-small = ["linear-gc", "dotnet-pal-storage/linear-gc-small"]
+# WASI Preview 1 providers on wasm32-wasip1.
+wasi-clock = ["linear", "dep:dotnet-pal-wasip1"]
+wasi-runtime = ["wasi-clock"]
+wasi-dispatch = ["wasi-runtime", "dotnet-pal-wasip1/wasi-dispatch"]
+
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+dotnet-pal-rs = { path = "../.." }
+dotnet-pal-linux = { path = "../../crates/dotnet-pal-linux", optional = true }
+dotnet-pal-host = { path = "../../crates/dotnet-pal-host", optional = true }
+dotnet-pal-storage = { path = "../../crates/dotnet-pal-storage", optional = true }
+dotnet-pal-wasm = { path = "../../crates/dotnet-pal-wasm", optional = true }
+dotnet-pal-wasip1 = { path = "../../crates/dotnet-pal-wasip1", optional = true }
