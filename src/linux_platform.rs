@@ -389,22 +389,11 @@ impl port::Topology for Linux {
         Ok(if limit.rlim_cur == libc::RLIM_INFINITY { 0 } else { limit.rlim_cur })
     }
     fn cache_size() -> Result<usize> {
-        let mut best: u64 = 0;
-        for name in [libc::_SC_LEVEL1_DCACHE_SIZE, libc::_SC_LEVEL2_CACHE_SIZE, libc::_SC_LEVEL3_CACHE_SIZE, libc::_SC_LEVEL4_CACHE_SIZE] {
-            let value = unsafe { libc::sysconf(name) };
-            if value > 0 { best = best.max(value as u64); }
-        }
-        if best == 0 {
-            for index in 0..4u8 {
-                let mut path = *b"/sys/devices/system/cpu/cpu0/cache/index0/size\0";
-                path[41] = b'0' + index;
-                let mut buffer = [0u8; 64];
-                if let Some(length) = read_file(&path, &mut buffer) {
-                    if let Some(value) = parse_size(&buffer[..length]) { best = best.max(value); }
-                }
-            }
-        }
-        usize::try_from(best).map_err(|_| Error::Os)
+        // Reuse each level's sysconf/sysfs fallback. A partial sysconf answer
+        // must not hide deeper caches known only through sysfs.
+        let mut best = 0;
+        for level in 1..=4 { best = best.max(Self::cache_level_size(level)?); }
+        Ok(best)
     }
     fn cache_level_size(level: u32) -> Result<usize> {
         let name = match level {
