@@ -34,6 +34,18 @@ fn stats() -> Stats {
 }
 /// Open descriptors of this process; the listing's own is in every count.
 fn descriptors() -> usize { std::fs::read_dir("/dev/fd").unwrap().count() }
+/// Snapshot host-owned inheritable descriptors before the provider makes pipes.
+/// The directory used to enumerate them is close-on-exec and is not inherited.
+fn inherited_descriptors() -> Vec<i32> {
+    let mut descriptors = std::fs::read_dir("/dev/fd").unwrap()
+        .map(|entry| entry.unwrap().file_name().to_str().unwrap().parse::<i32>().unwrap())
+        .filter(|fd| {
+            let flags = unsafe { libc::fcntl(*fd, libc::F_GETFD) };
+            flags >= 0 && flags & libc::FD_CLOEXEC == 0
+        }).collect::<Vec<_>>();
+    descriptors.sort_unstable();
+    descriptors
+}
 
 /// Starts a program. What the boundary takes is counted, not terminated: the paths are followed by other bytes.
 fn start(program: &str, arguments: &[&str], environment: Option<&[&str]>, directory: Option<&str>, pipes: u32) -> (u32, Spawned) {
@@ -332,13 +344,25 @@ fn a_child_that_cannot_start_is_named_and_leaves_nothing() {
 
 #[test]
 fn no_descriptor_leaks_and_no_zombie_stays() {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     let _turn = turn();
+    // Model an embedding host (including CI runners) with a deliberately
+    // inheritable descriptor. F_DUPFD clears CLOEXEC, unlike File::try_clone.
+    let source = std::fs::File::open("/dev/null").unwrap();
+    let sentinel = unsafe { libc::fcntl(source.as_raw_fd(), libc::F_DUPFD, 128) };
+    assert!(sentinel >= 0);
+    let sentinel = unsafe { OwnedFd::from_raw_fd(sentinel) };
     let opened = descriptors();
-    // Children with every pipe are alive while another one lists what it was given: the three streams and the listing's own.
+    let inherited = inherited_descriptors();
+    assert!(inherited.contains(&sentinel.as_raw_fd()));
+    // Keep provider pipes alive while another child lists its descriptors.
+    // Test existence after expansion to exclude the glob's now-closed directory.
     let held = [(); 2].map(|_| started("/bin/cat", &["cat"], None, None, PIPE_INPUT | PIPE_OUTPUT | PIPE_ERROR));
-    let (code, text) = shell("for f in /dev/fd/*; do echo \"${f##*/}\"; done");
-    let listed = text.lines().map(|line| line.parse::<i32>().unwrap()).collect::<Vec<_>>();
-    assert!(code == 0 && listed.iter().filter(|fd| **fd <= 2).count() == 3 && listed.len() <= 4, "{listed:?}");
+    let (code, text) = shell("for f in /dev/fd/*; do if [ -e \"$f\" ]; then echo \"${f##*/}\"; fi; done");
+    let mut listed = text.lines().map(|line| line.parse::<i32>().unwrap()).collect::<Vec<_>>();
+    listed.sort_unstable();
+    assert_eq!(code, 0);
+    assert_eq!(listed, inherited, "only the host's inheritable descriptors may reach the child");
     for child in held { assert_eq!(finish(child), 0); }
     assert_eq!(descriptors(), opened);
     // Giving the handle back does not end the child: it is this test that ends it, and that reaps it.

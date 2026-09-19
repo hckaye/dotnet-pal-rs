@@ -208,6 +208,17 @@
       "owners": [
         "WriteBarriers.S.o"
       ]
+    },
+    "vxsort-isa-contract": {
+      "reason": "Defined by src/coreclr/gc/vxsort/isa_detection.cpp or dummy.cpp at the audited runtime pin. The enabled implementation uses minipal_getcpufeatures (the rebuilt, audited minipal) and local state only. The disabled implementation returns false and performs no OS operation.",
+      "symbols": [
+        "_Z25IsSupportedInstructionSet14InstructionSet",
+        "_Z27InitSupportedInstructionSeti"
+      ],
+      "owners": [
+        "gcwks.cpp.o",
+        "gcsvr.cpp.o"
+      ]
     }
   }
 }

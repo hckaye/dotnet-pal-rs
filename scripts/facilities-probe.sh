@@ -27,6 +27,18 @@ rm -rf samples/FacilitiesProbe/obj samples/FacilitiesProbe/bin
 dotnet publish samples/FacilitiesProbe/FacilitiesProbe.csproj -c Release -r "$rid" "-p:ProbeExpect=${expect//;/%3B}" \
   "-p:IlcSdkPath=$overlay/" "-p:IlcFrameworkNativePath=$framework/" \
   "-p:PalLinkMap=$root/artifacts/facilities-probe/link.map" -o artifacts/facilities-probe
+# A custom ICMP payload needs a raw socket; an unprivileged Ping may fall back
+# to the system ping utility, which cannot preserve this test's payload. CI opts
+# in to a single file capability rather than running the build/probe as root.
+case "${PROBE_GRANT_NET_RAW:-0}" in
+  0) ;;
+  1)
+    command -v setcap >/dev/null || { echo 'install libcap2-bin for PROBE_GRANT_NET_RAW=1' >&2; exit 1; }
+    sudo -n setcap cap_net_raw=ep artifacts/facilities-probe/FacilitiesProbe
+    trap 'sudo -n setcap -r artifacts/facilities-probe/FacilitiesProbe' EXIT
+    ;;
+  *) echo 'PROBE_GRANT_NET_RAW must be 0 or 1' >&2; exit 2 ;;
+esac
 timeout 300s artifacts/facilities-probe/FacilitiesProbe | tee artifacts/facilities-probe/run.log
 grep -q '^FACILITIES PROBE PASS$' artifacts/facilities-probe/run.log
 PROBE_GROUPS="$expect" python3 - <<'PY'
