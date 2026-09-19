@@ -218,7 +218,6 @@ static void check_virtual_memory(void) {
     fill(bytes, MIB, 0xa5);
     REQUIRE(vm->reset(bytes, 4096) == DOTNET_PAL_OK, "reset");
     REQUIRE(vm->decommit(bytes, 4096) == DOTNET_PAL_OK, "decommit");
-    REQUIRE(all(bytes, 4096, 0), "decommit zeroes the range");
     REQUIRE(bytes[4096] == 0xa5 && bytes[MIB - 1] == 0xa5, "decommit leaves the neighbours alone");
     REQUIRE(vm->commit(bytes, 4096) == DOTNET_PAL_OK, "recommit");
     REQUIRE(all(bytes, 4096, 0), "recommitted memory reads as zero");
@@ -231,6 +230,7 @@ static void check_virtual_memory(void) {
     REQUIRE(vm->release(second, MIB) == DOTNET_PAL_OK, "release");
     /* The region takes the memory back: the next reservation of the same shape fits. */
     REQUIRE(vm->reserve(2 * MIB, 0, 0, &first) == DOTNET_PAL_OK && first != NULL, "reserve after release");
+    REQUIRE(vm->commit(first, 2 * MIB) == DOTNET_PAL_OK, "commit reused reservation");
     REQUIRE(all((unsigned char *)first, 2 * MIB, 0), "reused memory is zeroed");
     REQUIRE(vm->release(first, 2 * MIB) == DOTNET_PAL_OK, "release");
 }
@@ -406,12 +406,18 @@ static void check_diagnostics(void) {
 static const char fault_token[] = "fault data";
 static struct { uint32_t kind; uintptr_t address, pc, sp; void *data; int count; } seen;
 static volatile double fault_scratch = 3.25;
+static uintptr_t expected_execute_fault;
 static uint32_t on_fault(uint32_t kind, uintptr_t address, void *raw, size_t size, void *data) {
     dotnet_pal_fault_frame_arm64 *frame = raw;
     if (size != sizeof *frame) return DOTNET_PAL_FAULT_UNHANDLED;
     seen.kind = kind; seen.address = address; seen.pc = (uintptr_t)frame->pc; seen.sp = (uintptr_t)frame->sp; seen.data = data; seen.count++;
     /* Floating point work in the handler: the interrupted code must not notice it. */
     fault_scratch = fault_scratch * 1.5 + (double)seen.count;
+    if (expected_execute_fault != 0 && frame->pc == expected_execute_fault) {
+        frame->x[0] = UINT64_C(0x600df00d);
+        frame->pc = frame->x[30]; /* return from the call into an NX page */
+        return DOTNET_PAL_FAULT_RESUME;
+    }
     if (frame->pc == (uintptr_t)&pal_fault_load) frame->x[0] = UINT64_C(0x600df00d) + address;
     else if (frame->pc != (uintptr_t)pal_fault_keeps_store) return DOTNET_PAL_FAULT_UNHANDLED;
     frame->pc += 4; /* step over the instruction that faulted */
@@ -443,6 +449,90 @@ static void check_faults(void) {
     dotnet_pal_faults_stats stats = {0};
     REQUIRE(faults->read_stats(&stats, sizeof stats) == DOTNET_PAL_OK, "fault read_stats");
     REQUIRE(stats.installs == 1 && stats.delivered == 4 && stats.resumed == 4 && stats.unhandled == 0 && stats.rejected == 2, "fault counters");
+}
+
+/* Check CPU-enforced access, not just the return status of protect/decommit. */
+static void inaccessible(uintptr_t address) {
+    int before = seen.count;
+    REQUIRE(pal_fault_load((const uint64_t *)address) == UINT64_C(0x600df00d) + address,
+            "an inaccessible load was resumed by the handler");
+    REQUIRE(seen.count == before + 1 && seen.kind == DOTNET_PAL_FAULT_ACCESS && seen.address == address,
+            "an inaccessible page really faults");
+    REQUIRE(api->image.readable(address, 8) == DOTNET_PAL_NOT_FOUND, "readability checks the page table");
+}
+static void read_only(uint64_t *address) {
+    uint64_t kept = *address;
+    int before = seen.count;
+    REQUIRE(pal_fault_keeps(address) == 0, "registers across a denied write");
+    REQUIRE(seen.count == before + 1 && seen.kind == DOTNET_PAL_FAULT_ACCESS && seen.address == (uintptr_t)address,
+            "a write to a read-only page really faults");
+    REQUIRE(*address == kept, "a denied write did not change memory");
+}
+static void check_memory_protection(void) {
+    const size_t page = 4096;
+    void *reservation = NULL;
+    size_t free_before = pal_region_free();
+    REQUIRE(vm->reserve(2 * page, page, 0, &reservation) == DOTNET_PAL_OK, "protected reservation");
+    inaccessible((uintptr_t)reservation);
+    REQUIRE(vm->commit(reservation, 2 * page) == DOTNET_PAL_OK, "commit protected reservation");
+    unsigned char *bytes = reservation;
+    REQUIRE(all(bytes, 2 * page, 0), "fresh commits are zero");
+    fill(bytes, page, 0xa5); fill(bytes + page, page, 0x5a);
+    REQUIRE(vm->commit(reservation, page) == DOTNET_PAL_OK && all(bytes, page, 0xa5), "commit is idempotent");
+    REQUIRE(vm->decommit(reservation, page) == DOTNET_PAL_OK, "decommit protected reservation");
+    inaccessible((uintptr_t)reservation);
+    REQUIRE(all(bytes + page, page, 0x5a), "decommit leaves the adjacent page alone");
+    REQUIRE(api->image.readable((uintptr_t)bytes + page - 4, 8) == DOTNET_PAL_NOT_FOUND,
+            "a readable subrange cannot straddle an inaccessible page");
+    REQUIRE(vm->commit(reservation, 2 * page) == DOTNET_PAL_OK, "recommit mixed pages");
+    REQUIRE(all(bytes, page, 0) && all(bytes + page, page, 0x5a), "recommit zeroes only decommitted pages");
+    REQUIRE(vm->release(reservation, 2 * page) == DOTNET_PAL_OK, "release protected reservation");
+    inaccessible((uintptr_t)reservation);
+
+    void *mapping = NULL;
+    const uint32_t rw = DOTNET_PAL_READ | DOTNET_PAL_WRITE;
+    const uint32_t rx = DOTNET_PAL_READ | DOTNET_PAL_EXECUTE;
+    REQUIRE(rt->mapping_allocate(2 * page, rw, &mapping) == DOTNET_PAL_OK, "writable native mapping");
+    uint64_t *word = mapping;
+    *word = UINT64_C(0x123456789abcdef0);
+    ((unsigned char *)mapping)[page] = 0x77;
+    REQUIRE(rt->mapping_protect(mapping, page, DOTNET_PAL_READ) == DOTNET_PAL_OK, "read-only protection");
+    read_only(word);
+    ((unsigned char *)mapping)[page] = 0x88; /* adjacent page is still writable */
+    REQUIRE(rt->mapping_protect(mapping, page, 0) == DOTNET_PAL_OK, "no-access protection");
+    inaccessible((uintptr_t)mapping);
+    REQUIRE(rt->mapping_protect(mapping, page, rw) == DOTNET_PAL_OK && *word == UINT64_C(0x123456789abcdef0),
+            "protection changes preserve contents");
+    REQUIRE(((unsigned char *)mapping)[page] == 0x88, "protection changes preserve the neighbour");
+
+    uint32_t *code = mapping;
+    code[0] = UINT32_C(0x52800540); /* mov w0, #42 */
+    code[1] = UINT32_C(0xd65f03c0); /* ret */
+    uint64_t (*run_code)(void) = (uint64_t (*)(void))mapping;
+    expected_execute_fault = (uintptr_t)mapping;
+    int before = seen.count;
+    REQUIRE(run_code() == UINT64_C(0x600df00d) && seen.count == before + 1 && seen.kind == DOTNET_PAL_FAULT_ACCESS,
+            "a writable non-executable page cannot execute");
+    expected_execute_fault = 0;
+    REQUIRE(rt->mapping_protect(mapping, page, rx) == DOTNET_PAL_OK && run_code() == 42, "RX code executes");
+    read_only(word);
+    REQUIRE(rt->mapping_protect(mapping, page, rw) == DOTNET_PAL_OK, "make code writable again");
+    code[0] = UINT32_C(0x52800a80); /* mov w0, #84 */
+    REQUIRE(rt->mapping_protect(mapping, page, rx) == DOTNET_PAL_OK && run_code() == 84,
+            "RW to RX synchronizes rewritten instructions");
+    REQUIRE(rt->mapping_protect(mapping, page, DOTNET_PAL_WRITE) == DOTNET_PAL_UNSUPPORTED && run_code() == 84,
+            "unrepresentable permissions are refused without changing the mapping");
+    REQUIRE(rt->mapping_protect((unsigned char *)mapping + 1, page, rw) == DOTNET_PAL_INVALID_ARGUMENT && run_code() == 84,
+            "an unaligned protection request is refused atomically");
+    REQUIRE(rt->mapping_protect((void *)&check_table, page, 0) == DOTNET_PAL_INVALID_ARGUMENT,
+            "the provider cannot unmap its image");
+    REQUIRE(rt->mapping_release(mapping, 2 * page) == DOTNET_PAL_OK, "release native mapping");
+    inaccessible((uintptr_t)mapping);
+    mapping = (void *)1;
+    REQUIRE(rt->mapping_allocate(page, DOTNET_PAL_WRITE, &mapping) == DOTNET_PAL_UNSUPPORTED && mapping == NULL,
+            "unsupported allocation permissions do not allocate storage");
+    REQUIRE(pal_region_free() == free_before, "protected storage is fully returned");
+    put("MEMORY PROTECTION PASS reserve, decommit, release, RO, NX, RX and instruction cache\n");
 }
 
 /* ---- files: the in-memory file system, living on the port's heap through the Rust allocator ---- */
@@ -514,6 +604,7 @@ int main(int argc, char **argv) {
     check_rwlock();
     check_diagnostics();
     check_faults();
+    check_memory_protection();
     check_files();
 
     dotnet_pal_kernel_stats kernel = {0};

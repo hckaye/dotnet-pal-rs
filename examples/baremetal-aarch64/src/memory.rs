@@ -2,17 +2,18 @@
 //! end of the image's boot stack (`__heap_start`) and the end of the machine's
 //! RAM (`__heap_end`, 0x8000_0000 with `-m 1024`).
 //!
-//! **This is eager RAM, not virtual memory.** Every byte the region hands out is
-//! already mapped, readable and writable by the identity map the boot code
-//! installed. There are no inaccessible reservations, no page protection and no
-//! way to fault on an uncommitted access. What the port does keep are the
-//! contracts the boundary's front ends check: `reserve` returns a range aligned
-//! as asked, ranges are page multiples, distinct live allocations never overlap,
-//! and freshly reserved or decommitted storage reads back as zero.
+//! The RAM is identity-backed and bounded by the machine's physical capacity;
+//! it cannot overcommit or remap a freed physical frame at a different address.
+//! Unlike eager storage, reservations and decommitted pages are inaccessible.
+//! The 4 KiB page descriptors enforce mapping permissions at EL1. Commit zeroes
+//! newly accessible pages and preserves pages that were already committed.
 use crate::sync::Single;
 use crate::Baremetal;
 use core::{ffi::c_void, ptr};
 use dotnet_pal_rs::port::{self, Error, Result};
+
+mod pages;
+pub use pages::readable;
 
 pub const PAGE: usize = 4096;
 /// Slice of the region the native helper heap takes on its first allocation.
@@ -68,7 +69,7 @@ impl Region {
         }
         for index in 0..self.count {
             let extent = self.extents[index];
-            let start = round_up(extent.start, alignment);
+            let Some(start) = extent.start.checked_add(alignment - 1).map(|n| n & !(alignment - 1)) else { continue };
             let Some(end) = start.checked_add(size) else { continue };
             if start < extent.start || end > extent.end {
                 continue;
@@ -89,9 +90,20 @@ impl Region {
         }
         None
     }
-    /// Returns a range to the free list. `false` means the free list is full and
-    /// the range is leaked rather than merged into a neighbour.
+    /// Whether a return can be recorded without overlap or metadata exhaustion.
+    fn can_give(&self, start: usize, size: usize) -> bool {
+        let Some(end) = start.checked_add(size) else { return false };
+        if size == 0 { return false; }
+        let mut adjacent = false;
+        for extent in &self.extents[..self.count] {
+            if start < extent.end && extent.start < end { return false; }
+            adjacent |= extent.end == start || extent.start == end;
+        }
+        adjacent || self.count < MAX_EXTENTS
+    }
+    /// Returns a range to the free list. Failure leaves the list unchanged.
     pub fn give(&mut self, start: usize, size: usize) -> bool {
+        if !self.can_give(start, size) { return false; }
         let Some(end) = start.checked_add(size) else { return false };
         if size == 0 {
             return false;
@@ -138,7 +150,10 @@ pub fn init() {
     // SAFETY: single core, no other borrow, called once before threads exist.
     let region = unsafe { REGION.get() };
     *region = Region::new();
-    region.give(start, end - start);
+    assert!(region.give(start, end - start));
+    // No free page is accessible. The image, page tables and boot stack are
+    // below start and stay mapped; take() maps owned storage before using it.
+    unsafe { pages::protect(start, end - start, 0) }.expect("RAM page table bounds");
 }
 pub fn bounds() -> (usize, usize) {
     (
@@ -148,83 +163,81 @@ pub fn bounds() -> (usize, usize) {
 }
 /// Takes `size` bytes (a page multiple) aligned to `alignment` from the region.
 pub fn take(size: usize, alignment: usize) -> Option<usize> {
+    if size == 0 || size % PAGE != 0 || alignment < PAGE || !alignment.is_power_of_two() { return None; }
     // SAFETY: no borrow is held across a call that could switch threads.
-    unsafe { REGION.get() }.take(size, alignment)
+    let region = unsafe { REGION.get() };
+    let address = region.take(size, alignment)?;
+    if unsafe { pages::protect(address, size, dotnet_pal_rs::runtime::READ | dotnet_pal_rs::runtime::WRITE) }.is_err() {
+        assert!(region.give(address, size)); // exactly reverses the take
+        return None;
+    }
+    Some(address)
 }
 pub fn give(start: usize, size: usize) -> bool {
-    unsafe { REGION.get() }.give(start, size)
+    // Check that the return can be recorded before revoking the caller's memory.
+    // Single core, no yield: can_give remains true until give records the return.
+    let region = unsafe { REGION.get() };
+    if !region.can_give(start, size) { return false; }
+    if unsafe { pages::protect(start, size, 0) }.is_err() { return false; }
+    region.give(start, size)
 }
 pub fn available() -> usize {
     unsafe { REGION.get() }.available()
 }
 pub fn zero(address: usize, size: usize) {
-    // SAFETY: the caller owns the range and every region address is mapped RAM.
+    // SAFETY: the caller owns the range and has made all of its pages writable.
     unsafe { ptr::write_bytes(address as *mut u8, 0, size) };
 }
 
 impl port::VirtualMemory for Baremetal {
-    fn page_size() -> usize {
-        PAGE
-    }
-    /// The range is handed out already accessible and zeroed, so the first
-    /// `commit` observes the zero-filled memory the GC expects.
+    fn page_size() -> usize { PAGE }
     unsafe fn reserve(size: usize, alignment: usize) -> Result<*mut c_void> {
         crate::trace(b"vm reserve size", size as u64);
-        let address = take(size, alignment).ok_or(Error::OutOfMemory);
-        crate::trace(b"vm reserve at", address.map_or(0, |a| a as u64));
-        let address = address?;
-        zero(address, size);
+        let address = take(size, alignment).ok_or(Error::OutOfMemory)?;
+        // No callback or yield can expose the temporary writable mapping.
+        if let Err(error) = unsafe { pages::protect(address, size, 0) } {
+            assert!(give(address, size));
+            return Err(error);
+        }
+        crate::trace(b"vm reserve at", address as u64);
         Ok(address as *mut c_void)
     }
-    /// Nothing to do: this port has no inaccessible reservations. Commit cannot
-    /// fail here and cannot be a memory-pressure signal for the caller.
-    unsafe fn commit(_address: *mut c_void, _size: usize) -> Result<()> {
-        crate::trace(b"vm commit at", _address as u64);
-        Ok(())
+    unsafe fn commit(address: *mut c_void, size: usize) -> Result<()> {
+        crate::trace(b"vm commit at", address as u64);
+        unsafe { pages::commit(address as usize, size) }
     }
-    /// Zeroes the range. The memory stays readable afterwards; a decommitted
-    /// access faults on a real OS and does not fault here.
     unsafe fn decommit(address: *mut c_void, size: usize) -> Result<()> {
-        zero(address as usize, size);
-        Ok(())
+        unsafe { pages::protect(address as usize, size, 0) }
     }
     unsafe fn release(address: *mut c_void, size: usize) -> Result<()> {
-        if give(address as usize, size) {
-            Ok(())
-        } else {
-            Err(Error::Os)
-        }
+        if give(address as usize, size) { Ok(()) } else { Err(Error::Os) }
     }
-    /// A reset only says the contents are no longer needed. Keeping them is a
-    /// valid implementation and costs nothing here.
-    unsafe fn reset(_address: *mut c_void, _size: usize) -> Result<()> {
-        Ok(())
-    }
+    /// Reset may retain contents. Unlike decommit, it does not revoke access.
+    unsafe fn reset(_address: *mut c_void, _size: usize) -> Result<()> { Ok(()) }
 }
 
+fn page_rounded(size: usize) -> Result<usize> {
+    if size == 0 { return Err(Error::InvalidArgument); }
+    size.checked_add(PAGE - 1).map(|n| n & !(PAGE - 1)).ok_or(Error::InvalidArgument)
+}
 impl port::NativeMapping for Baremetal {
-    fn page_size() -> usize {
-        PAGE
-    }
-    /// Same storage as `VirtualMemory`, with the protection bits ignored: every
-    /// mapping is readable, writable and executable because the identity map has
-    /// one set of permissions for all of RAM.
-    unsafe fn allocate(size: usize, _protection: u32) -> Result<*mut c_void> {
-        crate::trace(b"mapping allocate", size as u64);
-        let size = round_up(size, PAGE);
+    fn page_size() -> usize { PAGE }
+    unsafe fn allocate(size: usize, protection: u32) -> Result<*mut c_void> {
+        pages::flags(protection)?; // reject unrepresentable permissions before allocating
+        let size = page_rounded(size)?;
         let address = take(size, PAGE).ok_or(Error::OutOfMemory)?;
         zero(address, size);
+        if let Err(error) = unsafe { pages::protect(address, size, protection) } {
+            assert!(give(address, size));
+            return Err(error);
+        }
         Ok(address as *mut c_void)
     }
     unsafe fn release(address: *mut c_void, size: usize) -> Result<()> {
-        if give(address as usize, round_up(size, PAGE)) {
-            Ok(())
-        } else {
-            Err(Error::Os)
-        }
+        if give(address as usize, page_rounded(size)?) { Ok(()) } else { Err(Error::Os) }
     }
-    unsafe fn protect(_address: *mut c_void, _size: usize, _protection: u32) -> Result<()> {
-        Ok(())
+    unsafe fn protect(address: *mut c_void, size: usize, protection: u32) -> Result<()> {
+        unsafe { pages::protect(address as usize, page_rounded(size)?, protection) }
     }
 }
 
@@ -351,8 +364,8 @@ impl port::NativeHeap for Baremetal {
 }
 
 /// The Rust global allocator, over the native heap. The in-memory file system is
-/// the image's only user of `alloc`; nothing in it asks for more than the heap's
-/// 16-byte alignment, and a request that did would fail instead of being misaligned.
+/// the image's only user of `alloc`; over-aligned requests keep a back-pointer
+/// so deallocation can return the underlying native block.
 struct PortAllocator;
 // SAFETY: blocks come from the native heap above, which hands out exclusive,
 // 16-byte aligned storage and keeps a failed resize's old block intact. A stricter

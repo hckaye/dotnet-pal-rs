@@ -46,7 +46,7 @@ fn range(address: usize, size: usize) -> Result<(usize, usize)> {
 }
 
 unsafe fn entry(index: usize) -> *mut u64 {
-    // SAFETY: every caller obtained the indices from range(). No reference to
+    // SAFETY: every caller checked its indices against RAM_PAGES. No reference to
     // the static is created, and the descriptors are accessed only volatilely.
     unsafe { ptr::addr_of_mut!(pal_ram_pages).cast::<u64>().add(index) }
 }
@@ -125,4 +125,20 @@ unsafe fn sync_instructions(address: usize, size: usize) {
         line += instruction_line;
     }
     unsafe { asm!("dsb ish", "isb", options(nostack, preserves_flags)) };
+}
+
+/// Queries actual RAM descriptors, including image pages below the allocator.
+/// Being inside the RAM address window is not proof that a page is readable.
+pub fn readable(address: usize, size: usize) -> Result<bool> {
+    let end = address.checked_add(size).ok_or(Error::InvalidArgument)?;
+    let ram_end = RAM_START + RAM_PAGES * PAGE;
+    if address < RAM_START || address >= ram_end || end > ram_end { return Ok(false); }
+    if size == 0 { return Ok(true); }
+    let first = (address - RAM_START) / PAGE;
+    let last = (end - 1 - RAM_START) / PAGE;
+    for index in first..=last {
+        // SAFETY: indices are inside the statically allocated RAM page table.
+        if unsafe { ptr::read_volatile(entry(index)) } & VALID == 0 { return Ok(false); }
+    }
+    Ok(true)
 }
