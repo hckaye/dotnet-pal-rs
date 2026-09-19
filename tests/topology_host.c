@@ -61,8 +61,18 @@ static uint32_t virtual_limit(uint64_t *limit) {
     struct rlimit as; if (getrlimit(RLIMIT_AS, &as) != 0) return DOTNET_PAL_OS_ERROR;
     *limit = as.rlim_cur == RLIM_INFINITY ? 0 : (uint64_t)as.rlim_cur; return DOTNET_PAL_OK;
 }
+static uint32_t cache_level_size(uint32_t level, size_t *bytes);
 static uint32_t cache_size(size_t *bytes) {
-    long v = sysconf(_SC_LEVEL2_CACHE_SIZE); *bytes = v > 0 ? (size_t)v : 0; return DOTNET_PAL_OK;
+    /* The summary is the deepest known cache, not unconditionally L2. Use the
+     * same sysconf/sysfs lookup as the per-level reference, including on ARM64. */
+    *bytes = 0;
+    for (uint32_t level = 1; level <= DOTNET_PAL_MAX_CACHE_LEVEL; ++level) {
+        size_t current = 0;
+        uint32_t status = cache_level_size(level, &current);
+        if (status != DOTNET_PAL_OK) { *bytes = 0; return status; }
+        if (current != 0) *bytes = current;
+    }
+    return DOTNET_PAL_OK;
 }
 static uint32_t cache_level_size(uint32_t level, size_t *bytes) {
     if (pal_topology_fault == 2) { *bytes = 4096; return DOTNET_PAL_BUFFER_TOO_SMALL; } /* a status the group does not have */
