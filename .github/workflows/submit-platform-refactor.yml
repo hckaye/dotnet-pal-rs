@@ -1,0 +1,29 @@
+name: submit-platform-refactor
+on:
+  push:
+    branches: ['refactor/platform-crates']
+    paths: ['.github/workflows/submit-platform-refactor.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.repository == 'hckaye/dotnet-pal-rs' && github.ref == 'refs/heads/refactor/platform-crates'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/platform-crates
+          fetch-depth: 0
+      - name: Apply the fixed source plan and verify the entire result
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          python3 .refactor-inputs/apply.py
+          test "$(git write-tree)" = 94ad1496b05c850d120b3e81e31726d59b22e8db
+          git diff --cached --check
+          git -c user.name='hckaye' -c user.email='hckaye@users.noreply.github.com' commit -m 'Separate platform implementations from PAL contracts and bridge'
+          git push origin HEAD:refs/heads/refactor/platform-crates
