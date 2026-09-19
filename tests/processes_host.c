@@ -2,11 +2,14 @@
  * fork and exec, with a close-on-exec pipe that carries the errno of a failed
  * chdir or exec back to the parent, and waitpid at intervals. Fault 1 withholds
  * a callback; fault 2 breaks the output contracts so the front end's sanitizing
- * is observable. A pipe handle is the descriptor plus one. */
+ * is observable. A pipe handle is the descriptor plus one.
+ * pal_processes_host_start is the whole of a start. tests/spawn_as_host.c calls
+ * it with an identity, so that its children are children of this provider. */
 #define _GNU_SOURCE
 #include "dotnet_pal.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <grp.h>
 #include <limits.h>
 #include <pthread.h>
 #include <signal.h>
@@ -63,18 +66,33 @@ static uint32_t breach(uint32_t pipes, dotnet_pal_spawned *out) {
     default: return DOTNET_PAL_WOULD_BLOCK;             /* a status spawn does not have */
     }
 }
-static uint32_t process_spawn(const uint8_t *program, size_t program_length, const uint8_t *const *arguments, size_t argument_count,
+/* Groups, group, user, in the forked child. As the runtime's own System.Native: a process without the privilege to set
+ * groups may still start a child as its own user, so the refusal stands only when this process holds a group the list lacks. */
+static int assume(const dotnet_pal_identity *identity, gid_t *held) {
+    if (setgroups(identity->group_count, (const gid_t*)identity->groups) != 0) {
+        if (errno != EPERM) return 0;
+        int count = getgroups((int)identity->group_count, held); /* fails when this process holds more groups than the list names */
+        int listed = count >= 0;
+        for (int i = 0; listed && i < count; ++i) {
+            size_t at = 0;
+            while (at < identity->group_count && identity->groups[at] != held[i]) ++at;
+            listed = at < identity->group_count;
+        }
+        if (!listed) { errno = EPERM; return 0; }
+    }
+    return setgid(identity->group_id) == 0 && setuid(identity->user_id) == 0;
+}
+uint32_t pal_processes_host_start(const uint8_t *program, size_t program_length, const uint8_t *const *arguments, size_t argument_count,
     const uint8_t *const *environment, size_t environment_count, const uint8_t *directory, size_t directory_length, uint32_t pipes,
-    dotnet_pal_spawned *out, size_t size) {
-    (void)size;
-    if (pal_processes_fault == 2) return breach(pipes, out);
+    const dotnet_pal_identity *identity, dotnet_pal_spawned *out) {
     char path[PATH_MAX], home[PATH_MAX];
     if (!terminated(path, program, program_length) || (directory && !terminated(home, directory, directory_length))) return DOTNET_PAL_NAME_TOO_LONG;
     /* The vectors are counted; exec wants them terminated. */
     char **argv = calloc(argument_count + 1, sizeof *argv), **envp = environment ? calloc(environment_count + 1, sizeof *envp) : environ;
     child_t *child = calloc(1, sizeof *child);
+    gid_t *held = calloc(identity && identity->group_count ? identity->group_count : 1, sizeof *held); /* the forked child may not allocate */
     int ends[4][2] = {{-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}}, code = 0; /* per stream {read, write}; the last one reports */
-    if (!argv || !envp || !child) code = ENOMEM;
+    if (!argv || !envp || !child || !held) code = ENOMEM;
     for (int i = 0; i < 4 && code == 0; ++i) if ((i == 3 || (pipes & (1u << i))) && !channel(ends[i])) code = errno;
     pid_t pid = -1;
     if (code == 0) {
@@ -90,6 +108,8 @@ static uint32_t process_spawn(const uint8_t *program, size_t program_length, con
             for (int number = 1; number < NSIG; ++number) sigaction(number, &standard, NULL);
             sigset_t none; sigemptyset(&none); sigprocmask(SIG_SETMASK, &none, NULL);
             for (int i = 0; i < 3; ++i) if (ends[i][0] >= 0 && dup2(ends[i][i == 0 ? 0 : 1], i) < 0) goto failed;
+            /* The directory is entered as the new user. */
+            if (identity && !assume(identity, held)) goto failed;
             if (directory && chdir(home) != 0) goto failed;
             execve(path, argv, envp);
         failed:
@@ -107,7 +127,7 @@ static uint32_t process_spawn(const uint8_t *program, size_t program_length, con
         if (n != (ssize_t)sizeof code) code = 0;
         else { int status; while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {} }
     }
-    free(argv); if (environment) free(envp);
+    free(argv); free(held); if (environment) free(envp);
     for (int i = 0; i < 4; ++i) {
         /* The parent keeps the write end of the input and the read end of the others, and only when the child runs. */
         int kept = i == 3 || code != 0 ? -1 : i == 0 ? 1 : 0;
@@ -120,6 +140,13 @@ static uint32_t process_spawn(const uint8_t *program, size_t program_length, con
     if (pipes & DOTNET_PAL_PIPE_OUTPUT) out->output = (void*)(intptr_t)(ends[1][0] + 1);
     if (pipes & DOTNET_PAL_PIPE_ERROR) out->error = (void*)(intptr_t)(ends[2][0] + 1);
     return DOTNET_PAL_OK;
+}
+static uint32_t process_spawn(const uint8_t *program, size_t program_length, const uint8_t *const *arguments, size_t argument_count,
+    const uint8_t *const *environment, size_t environment_count, const uint8_t *directory, size_t directory_length, uint32_t pipes,
+    dotnet_pal_spawned *out, size_t size) {
+    (void)size;
+    if (pal_processes_fault == 2) return breach(pipes, out);
+    return pal_processes_host_start(program, program_length, arguments, argument_count, environment, environment_count, directory, directory_length, pipes, NULL, out);
 }
 /* One look under the lock: the only place that reaps, so the identifier is this child's for as long as `ended` is 0. */
 static int look(child_t *child) {

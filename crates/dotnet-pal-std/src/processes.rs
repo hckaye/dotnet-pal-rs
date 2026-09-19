@@ -28,6 +28,15 @@
 //! to the process rather than to the writing thread, so the parent's end of an
 //! input pipe is marked `F_SETNOSIGPIPE` there; other Unix systems hold SIGPIPE
 //! back for the writing thread and take the one a failed write raised off it again.
+//!
+//! A child under another identity (`CAP_SPAWN_AS`, Unix) is the same child with one
+//! more `pre_exec` step. `CommandExt::groups` is not stable, and std changes the user
+//! it is given before it runs a `pre_exec` step, when the privilege to set groups is
+//! gone. It also enters the working directory before that step, as the parent's
+//! user. So the step does all of it in the order the runtime's own System.Native
+//! uses: groups, group, user, then the directory, which the new user has to be
+//! allowed to enter. It runs in the forked child, the only thread of its own copy
+//! of the memory: the calls are async-signal-safe there and nothing is allocated.
 use super::{borrow, boxed, take, Std};
 use dotnet_pal_rs::kernel::INFINITE;
 use dotnet_pal_rs::port::{self, Error, Result};
@@ -170,47 +179,94 @@ fn quietly(write: impl FnOnce() -> Result<usize>) -> Result<usize> {
 #[cfg(any(not(unix), target_vendor = "apple"))]
 fn quietly(write: impl FnOnce() -> Result<usize>) -> Result<usize> { write() }
 
+/// Makes the child take an identity and then enter its directory, in that order. Runs in the forked child.
+#[cfg(unix)]
+fn assume(command: &mut Command, user: u32, group: u32, groups: &[u32], directory: Option<&[u8]>) -> Result<()> {
+    let directory = directory.map(std::ffi::CString::new).transpose().map_err(|_| Error::InvalidArgument)?;
+    // Everything the step needs exists before the fork: the list, a sorted copy to search and room for the groups this process holds.
+    let (groups, mut held) = (groups.to_vec(), vec![0 as libc::gid_t; groups.len()]);
+    let mut wanted = groups.clone();
+    wanted.sort_unstable();
+    let limit = unsafe { libc::sysconf(libc::_SC_NGROUPS_MAX) };
+    let step = move || {
+        let failed = || Err(io::Error::last_os_error());
+        if unsafe { libc::setgroups(groups.len() as _, groups.as_ptr()) } != 0 {
+            // The runtime's own System.Native lets a process without the privilege start a child as its own user: the request
+            // stands when this process holds no group the list lacks. macOS refuses a list of more than 16 before it looks at the privilege.
+            let code = io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            if code != libc::EPERM && !(code == libc::EINVAL && limit >= 0 && groups.len() as i64 > limit as i64) { return failed(); }
+            let holds = unsafe { libc::getgroups(groups.len() as _, held.as_mut_ptr()) };
+            if holds < 0 || (groups.is_empty() && holds > 0) || !held[..holds as usize].iter().all(|group| wanted.binary_search(group).is_ok()) {
+                return Err(io::Error::from_raw_os_error(code));
+            }
+        }
+        if unsafe { libc::setgid(group) != 0 || libc::setuid(user) != 0 } { return failed(); }
+        if let Some(directory) = &directory { if unsafe { libc::chdir(directory.as_ptr()) } != 0 { return failed(); } }
+        Ok(())
+    };
+    unsafe { std::os::unix::process::CommandExt::pre_exec(command, step) };
+    Ok(())
+}
+/// A child of either group: `identity` is the user, the group and the groups of a child of `spawn_as`.
+unsafe fn start(program: &[u8], arguments: &[*const u8], environment: Option<&[*const u8]>, directory: Option<&[u8]>, pipes: u32,
+    identity: Option<(u32, u32, &[u32])>) -> Result<Spawned> {
+    let program = Path::new(text(program)?);
+    // std searches PATH for a bare name; the boundary starts the file it was given.
+    let mut command = if program.parent().is_some_and(|parent| parent.as_os_str().is_empty()) { Command::new(Path::new(".").join(program)) } else { Command::new(program) };
+    let mut arguments = arguments.iter().map(|argument| text(unsafe { borrowed(*argument) }));
+    let name = arguments.next().ok_or(Error::InvalidArgument)??;
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::arg0(&mut command, name);
+    #[cfg(not(unix))]
+    let _ = name;
+    for argument in arguments { command.arg(argument?); }
+    if let Some(environment) = environment {
+        command.env_clear();
+        for entry in environment {
+            let (name, value) = variable(unsafe { borrowed(*entry) })?;
+            command.env(name, value);
+        }
+    }
+    match identity {
+        None => if let Some(directory) = directory { command.current_dir(text(directory)?); },
+        #[cfg(unix)]
+        Some((user, group, groups)) => assume(&mut command, user, group, groups, directory)?,
+        #[cfg(not(unix))]
+        Some(_) => return Err(Error::Unsupported),
+    }
+    let stream = |bit: u32| if pipes & bit != 0 { Stdio::piped() } else { Stdio::inherit() };
+    command.stdin(stream(PIPE_INPUT)).stdout(stream(PIPE_OUTPUT)).stderr(stream(PIPE_ERROR));
+    #[cfg(unix)]
+    reset_signals(&mut command);
+    let mut child = command.spawn().map_err(error)?;
+    let (input, output, errors) = (child.stdin.take().map(file), child.stdout.take().map(file), child.stderr.take().map(file));
+    #[cfg(target_vendor = "apple")]
+    if let Some(input) = &input {
+        const F_SETNOSIGPIPE: libc::c_int = 73; // <sys/fcntl.h>; this libc does not name it
+        if unsafe { libc::fcntl(std::os::fd::AsRawFd::as_raw_fd(input), F_SETNOSIGPIPE, 1) } != 0 {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(Error::Os);
+        }
+    }
+    let id = child.id();
+    #[cfg(windows)]
+    let handle = std::os::windows::io::AsRawHandle::as_raw_handle(&child) as usize;
+    let process = Process { state: Mutex::new(State { child, fate: Fate::Running, watched: false }), changed: Condvar::new(), #[cfg(unix)] id, #[cfg(windows)] handle };
+    let pipe = |file: Option<fs::File>| file.map_or(ptr::null_mut(), |file| boxed(Pipe(file)));
+    Ok(Spawned { process: boxed(process), id: id as u64, input: pipe(input), output: pipe(output), error: pipe(errors) })
+}
+
+impl port::SpawnAs for Std {
+    const PROVIDED: bool = cfg!(unix);
+    unsafe fn spawn_as(program: &[u8], arguments: &[*const u8], environment: Option<&[*const u8]>, directory: Option<&[u8]>, pipes: u32,
+        user_id: u32, group_id: u32, groups: &[u32]) -> Result<Spawned> {
+        unsafe { start(program, arguments, environment, directory, pipes, Some((user_id, group_id, groups))) }
+    }
+}
 impl port::Processes for Std {
     unsafe fn spawn(program: &[u8], arguments: &[*const u8], environment: Option<&[*const u8]>, directory: Option<&[u8]>, pipes: u32) -> Result<Spawned> {
-        let program = Path::new(text(program)?);
-        // std searches PATH for a bare name; the boundary starts the file it was given.
-        let mut command = if program.parent().is_some_and(|parent| parent.as_os_str().is_empty()) { Command::new(Path::new(".").join(program)) } else { Command::new(program) };
-        let mut arguments = arguments.iter().map(|argument| text(unsafe { borrowed(*argument) }));
-        let name = arguments.next().ok_or(Error::InvalidArgument)??;
-        #[cfg(unix)]
-        std::os::unix::process::CommandExt::arg0(&mut command, name);
-        #[cfg(not(unix))]
-        let _ = name;
-        for argument in arguments { command.arg(argument?); }
-        if let Some(environment) = environment {
-            command.env_clear();
-            for entry in environment {
-                let (name, value) = variable(unsafe { borrowed(*entry) })?;
-                command.env(name, value);
-            }
-        }
-        if let Some(directory) = directory { command.current_dir(text(directory)?); }
-        let stream = |bit: u32| if pipes & bit != 0 { Stdio::piped() } else { Stdio::inherit() };
-        command.stdin(stream(PIPE_INPUT)).stdout(stream(PIPE_OUTPUT)).stderr(stream(PIPE_ERROR));
-        #[cfg(unix)]
-        reset_signals(&mut command);
-        let mut child = command.spawn().map_err(error)?;
-        let (input, output, errors) = (child.stdin.take().map(file), child.stdout.take().map(file), child.stderr.take().map(file));
-        #[cfg(target_vendor = "apple")]
-        if let Some(input) = &input {
-            const F_SETNOSIGPIPE: libc::c_int = 73; // <sys/fcntl.h>; this libc does not name it
-            if unsafe { libc::fcntl(std::os::fd::AsRawFd::as_raw_fd(input), F_SETNOSIGPIPE, 1) } != 0 {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(Error::Os);
-            }
-        }
-        let id = child.id();
-        #[cfg(windows)]
-        let handle = std::os::windows::io::AsRawHandle::as_raw_handle(&child) as usize;
-        let process = Process { state: Mutex::new(State { child, fate: Fate::Running, watched: false }), changed: Condvar::new(), #[cfg(unix)] id, #[cfg(windows)] handle };
-        let pipe = |file: Option<fs::File>| file.map_or(ptr::null_mut(), |file| boxed(Pipe(file)));
-        Ok(Spawned { process: boxed(process), id: id as u64, input: pipe(input), output: pipe(output), error: pipe(errors) })
+        unsafe { start(program, arguments, environment, directory, pipes, None) }
     }
     unsafe fn wait(process: *mut c_void, timeout_ns: u64) -> Result<i32> {
         let process = unsafe { borrow::<Process>(process) }?;

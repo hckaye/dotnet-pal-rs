@@ -470,7 +470,14 @@ typedef struct { dotnet_pal_header header; dotnet_pal_files_ops ops; } dotnet_pa
  * multicast traffic (0..255; 0 keeps it on the host), MULTICAST_INTERFACE is
  * an interface index of the network group (0: the target's choice;
  * ADDRESS_NOT_AVAILABLE when no interface has it) and reads back as what was
- * set through the boundary.
+ * set through the boundary. PACKET_INFORMATION (a flag) makes the packets
+ * group report where a datagram arrived, DONT_FRAGMENT (a flag) forbids the
+ * fragmentation of what an IPv4 socket sends, RECEIVE_ERRORS (a flag) makes
+ * an error the network reports about what a datagram or raw socket sent (an
+ * unreachable host, an expired hop limit) the status of a later receive on
+ * that socket instead of dropping it; the error is reported once, and poll
+ * shows ERROR until it has been. A receive with no capacity on a datagram
+ * socket waits for a datagram like any other and reports zero bytes.
  * resolve writes up to capacity addresses for a host name and reports
  * NOT_FOUND when the name has none and TIMEOUT when the answer could not be
  * obtained for now; family 0 asks for both families.
@@ -482,6 +489,10 @@ typedef struct { dotnet_pal_header header; dotnet_pal_files_ops ops; } dotnet_pa
 #define DOTNET_PAL_FAMILY_LOCAL 3u
 #define DOTNET_PAL_SOCKET_STREAM 1u
 #define DOTNET_PAL_SOCKET_DATAGRAM 2u
+/* A raw socket of the family's ICMP protocol (ICMP for IPv4, ICMPv6 for IPv6). What it receives over IPv4 starts with
+ * the IP header, over IPv6 with the ICMPv6 header. It has no ports: the port of an address it is given is ignored, and
+ * every address it reports has port 0. ACCESS_DENIED where the process lacks the privilege. */
+#define DOTNET_PAL_SOCKET_RAW 3u
 #define DOTNET_PAL_SHUTDOWN_READ 1u
 #define DOTNET_PAL_SHUTDOWN_WRITE 2u
 #define DOTNET_PAL_SHUTDOWN_BOTH 3u
@@ -512,6 +523,9 @@ typedef struct { dotnet_pal_header header; dotnet_pal_files_ops ops; } dotnet_pa
 #define DOTNET_PAL_SOCKET_MULTICAST_HOPS 17u
 #define DOTNET_PAL_SOCKET_MULTICAST_LOOPBACK 18u
 #define DOTNET_PAL_SOCKET_MULTICAST_INTERFACE 19u
+#define DOTNET_PAL_SOCKET_PACKET_INFORMATION 20u
+#define DOTNET_PAL_SOCKET_DONT_FRAGMENT 21u
+#define DOTNET_PAL_SOCKET_RECEIVE_ERRORS 22u
 typedef struct { uint16_t family; uint16_t port; uint32_t scope; uint8_t address[16]; } dotnet_pal_socket_address;
 typedef struct { void *socket; uint32_t requested; uint32_t triggered; } dotnet_pal_poll_entry;
 typedef struct {
@@ -945,6 +959,47 @@ typedef struct {
 } dotnet_pal_priority_ops;
 typedef struct { dotnet_pal_header header; dotnet_pal_priority_ops ops; } dotnet_pal_host_priority;
 
+/* Where a datagram arrived (append-only group; it takes the handles of the
+ * sockets group). receive is sockets.receive for a datagram or a raw socket
+ * and also reports the interface the datagram arrived through (0 when the
+ * target does not say) and the address it was sent to. The option
+ * DOTNET_PAL_SOCKET_PACKET_INFORMATION has to be on before the datagram
+ * arrives; without it the destination is empty, and what is reported for a
+ * datagram that arrived before the option was switched is the target's. An
+ * IPv4 datagram on an IPv6 socket that carries both families has an
+ * IPv4-mapped destination, as its sender has; a link-local destination has
+ * the arrival interface as its scope. */
+#define DOTNET_PAL_CAP_PACKETS UINT64_C(2199023255552)
+typedef struct { uint32_t interface_index; uint32_t reserved; dotnet_pal_socket_address destination; } dotnet_pal_packet_info;
+typedef struct { uint64_t receive_ok, rejected_or_failed; } dotnet_pal_packets_stats;
+typedef struct {
+    uint32_t (*receive)(void *socket, uint8_t *data, size_t capacity, uint32_t flags, dotnet_pal_socket_address *from,
+                        dotnet_pal_packet_info *info, size_t info_size, size_t *received);
+    uint32_t (*read_stats)(dotnet_pal_packets_stats *out, size_t size);
+} dotnet_pal_packets_ops;
+typedef struct { dotnet_pal_header header; dotnet_pal_packets_ops ops; } dotnet_pal_host_packets;
+
+/* A child started as another user (append-only group). The request is the
+ * one of processes.spawn with the identity the child runs under: its user,
+ * its primary group and its supplementary groups. The result is a child of
+ * the processes group in every respect. The child takes its groups, its
+ * group and its user in that order and enters its working directory as the
+ * new user. ACCESS_DENIED when this process may not take that identity; a
+ * process without the privilege may still name its own user and group with
+ * groups it holds itself. Handles of other code that were not made
+ * close-on-exec reach this child as they reach any other, which a consumer
+ * that starts children for other users has to see to. */
+#define DOTNET_PAL_CAP_SPAWN_AS UINT64_C(4398046511104)
+typedef struct { uint32_t user_id, group_id; const uint32_t *groups; size_t group_count; } dotnet_pal_identity;
+typedef struct { uint64_t spawn_ok, rejected_or_failed; } dotnet_pal_spawn_as_stats;
+typedef struct {
+    uint32_t (*spawn_as)(const uint8_t *program, size_t program_length, const uint8_t *const *arguments, size_t argument_count,
+                         const uint8_t *const *environment, size_t environment_count, const uint8_t *directory, size_t directory_length,
+                         uint32_t pipes, const dotnet_pal_identity *identity, dotnet_pal_spawned *out, size_t size);
+    uint32_t (*read_stats)(dotnet_pal_spawn_as_stats *out, size_t size);
+} dotnet_pal_spawn_as_ops;
+typedef struct { dotnet_pal_header header; dotnet_pal_spawn_as_ops ops; } dotnet_pal_host_spawn_as;
+
 typedef struct {
     dotnet_pal_header header;
     dotnet_pal_vm_ops vm;
@@ -975,10 +1030,14 @@ typedef struct {
     dotnet_pal_local_sockets_ops local_sockets;
     dotnet_pal_accounts_ops accounts;
     dotnet_pal_priority_ops priority;
+    dotnet_pal_packets_ops packets;
+    dotnet_pal_spawn_as_ops spawn_as;
 } dotnet_pal_api;
 
 /* Use size checks BEFORE reading a capability group from a foreign table.
  * Each size marks the END of that group, not sizeof a future extended API. */
+#define DOTNET_PAL_SPAWN_AS_API_SIZE (offsetof(dotnet_pal_api, spawn_as) + sizeof(dotnet_pal_spawn_as_ops))
+#define DOTNET_PAL_PACKETS_API_SIZE (offsetof(dotnet_pal_api, packets) + sizeof(dotnet_pal_packets_ops))
 #define DOTNET_PAL_PRIORITY_API_SIZE (offsetof(dotnet_pal_api, priority) + sizeof(dotnet_pal_priority_ops))
 #define DOTNET_PAL_ACCOUNTS_API_SIZE (offsetof(dotnet_pal_api, accounts) + sizeof(dotnet_pal_accounts_ops))
 #define DOTNET_PAL_LOCAL_SOCKETS_API_SIZE (offsetof(dotnet_pal_api, local_sockets) + sizeof(dotnet_pal_local_sockets_ops))
@@ -1073,6 +1132,9 @@ const dotnet_pal_host_network *dotnet_pal_host_network_v2(void);
 const dotnet_pal_host_local_sockets *dotnet_pal_host_local_sockets_v2(void);
 const dotnet_pal_host_accounts *dotnet_pal_host_accounts_v2(void);
 const dotnet_pal_host_priority *dotnet_pal_host_priority_v2(void);
+/* Required only by host-packets and host-spawn-as respectively. */
+const dotnet_pal_host_packets *dotnet_pal_host_packets_v2(void);
+const dotnet_pal_host_spawn_as *dotnet_pal_host_spawn_as_v2(void);
 #if defined(__cplusplus)
 [[noreturn]] void dotnet_pal_host_abort(void);
 #else

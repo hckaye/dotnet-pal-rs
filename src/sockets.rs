@@ -18,6 +18,8 @@ pub const IPV6: u32 = 2;
 pub const LOCAL: u32 = 3;
 pub const STREAM: u32 = 1;
 pub const DATAGRAM: u32 = 2;
+/// A raw socket of the family's ICMP protocol.
+pub const RAW: u32 = 3;
 pub const SHUTDOWN_READ: u32 = 1;
 pub const SHUTDOWN_WRITE: u32 = 2;
 pub const SHUTDOWN_BOTH: u32 = 3;
@@ -55,6 +57,12 @@ pub const MULTICAST_HOPS: u32 = 17;
 pub const MULTICAST_LOOPBACK: u32 = 18;
 /// Index of the interface multicast traffic leaves through (`network` group; 0: the target's choice).
 pub const MULTICAST_INTERFACE: u32 = 19;
+/// Whether the `packets` group is told where a datagram arrived.
+pub const PACKET_INFORMATION: u32 = 20;
+/// Whether what an IPv4 socket sends may not be fragmented.
+pub const DONT_FRAGMENT: u32 = 21;
+/// Whether an error the network reports about what a datagram or raw socket sent becomes the status of a later receive.
+pub const RECEIVE_ERRORS: u32 = 22;
 /// Longest host name `resolve` accepts.
 pub const MAX_HOST_NAME: usize = 255;
 /// Most addresses one `resolve` call returns.
@@ -143,7 +151,8 @@ unsafe fn input(address: *const Address) -> Option<Address> {
 unsafe extern "C" fn create<S: Sockets>(family: u32, kind: u32, out: *mut *mut c_void) -> u32 {
     if !aligned_output(out) { return record(INVALID_ARGUMENT, 0); }
     unsafe { out.write(ptr::null_mut()) };
-    if !(IPV4..=LOCAL).contains(&family) || !(STREAM..=DATAGRAM).contains(&kind) { return record(INVALID_ARGUMENT, 0); }
+    // A raw socket speaks ICMP, which a local socket has none of.
+    if !(IPV4..=LOCAL).contains(&family) || !(STREAM..=RAW).contains(&kind) || (family == LOCAL && kind == RAW) { return record(INVALID_ARGUMENT, 0); }
     let status = match unsafe { S::create(family, kind) } {
         Ok(socket) if socket.is_null() => OS_ERROR,
         Ok(socket) => { unsafe { out.write(socket) }; OK }
@@ -236,7 +245,7 @@ unsafe extern "C" fn set_blocking<S: Sockets>(socket: *mut c_void, blocking: u32
 unsafe extern "C" fn get_option<S: Sockets>(socket: *mut c_void, option: u32, value: *mut u64) -> u32 {
     if !aligned_output(value) { return record(INVALID_ARGUMENT, 10); }
     unsafe { value.write(0) };
-    if socket.is_null() || !(REUSE_ADDRESS..=MULTICAST_INTERFACE).contains(&option) { return record(INVALID_ARGUMENT, 10); }
+    if socket.is_null() || !(REUSE_ADDRESS..=RECEIVE_ERRORS).contains(&option) { return record(INVALID_ARGUMENT, 10); }
     let status = match unsafe { S::get_option(socket, option) } {
         // The pending error travels as a status code and is held to the same set.
         Ok(result) if option == ERROR => { unsafe { value.write(if result > u32::MAX as u64 { OS_ERROR } else { sanitize(result as u32) } as u64) }; OK }
@@ -246,8 +255,8 @@ unsafe extern "C" fn get_option<S: Sockets>(socket: *mut c_void, option: u32, va
     record(status, 10)
 }
 unsafe extern "C" fn set_option<S: Sockets>(socket: *mut c_void, option: u32, value: u64) -> u32 {
-    if socket.is_null() || !(REUSE_ADDRESS..=MULTICAST_INTERFACE).contains(&option) || matches!(option, ERROR | AVAILABLE) { return record(INVALID_ARGUMENT, 10); }
-    let flag = matches!(option, REUSE_ADDRESS | NO_DELAY | KEEP_ALIVE | BROADCAST | IPV6_ONLY | MULTICAST_LOOPBACK);
+    if socket.is_null() || !(REUSE_ADDRESS..=RECEIVE_ERRORS).contains(&option) || matches!(option, ERROR | AVAILABLE) { return record(INVALID_ARGUMENT, 10); }
+    let flag = matches!(option, REUSE_ADDRESS | NO_DELAY | KEEP_ALIVE | BROADCAST | IPV6_ONLY | MULTICAST_LOOPBACK | PACKET_INFORMATION | DONT_FRAGMENT | RECEIVE_ERRORS);
     let hops = matches!(option, HOPS | MULTICAST_HOPS);
     // Multicast traffic with no hops stays on the host. Unicast traffic, a keep-alive time and a probe count need at least one.
     let positive = matches!(option, HOPS | KEEP_ALIVE_IDLE | KEEP_ALIVE_INTERVAL | KEEP_ALIVE_COUNT);

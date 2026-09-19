@@ -2,10 +2,14 @@
  * A handle is the descriptor plus one, readiness is poll(2) and every wake
  * channel is a non-blocking self-pipe. Fault 1 withholds a callback; fault 2
  * answers in the ways the front end is documented to sanitize.
- * pal_sockets_host_descriptor is for the reference providers of the network and
- * local_sockets groups, whose calls take these handles. A Unix domain socket is
- * known by asking the descriptor for its domain: the calls that take an IP
- * address refuse it, and its endpoints answer with the bare family. */
+ * pal_sockets_host_descriptor is for the reference providers of the network,
+ * local_sockets and packets groups, whose calls take these handles. A Unix domain
+ * socket is known by asking the descriptor for its domain: the calls that take an
+ * IP address refuse it, and its endpoints answer with the bare family. A raw
+ * socket is known by its type. It has no ports: the kernel reports its protocol
+ * number as its local port and reads the port an IPv6 send names as a protocol
+ * number, so no port goes in (but the protocol number, where a connect needs a
+ * port to count as one) and none comes out. */
 #define _GNU_SOURCE
 #include "dotnet_pal.h"
 #include <errno.h>
@@ -60,21 +64,30 @@ static uint32_t status_of(int code) {
 static uint32_t result(int rc) { return rc == 0 ? DOTNET_PAL_OK : status_of(errno); }
 static int own(int fd, int name) { int value = -1; socklen_t length = sizeof value; return getsockopt(fd, SOL_SOCKET, name, &value, &length) == 0 ? value : -1; }
 static int is_local(int fd) { return own(fd, SO_DOMAIN) == AF_UNIX; }
+static int is_raw(int fd) { return own(fd, SO_TYPE) == SOCK_RAW; }
+/* With IP_RECVERR the kernel keeps what ICMP reported in a queue of its own and polls the socket as in error while that queue holds
+ * anything, long after a call has reported the failure. The boundary never reads that queue, so reporting a failure empties it. */
+static void forget_errors(int fd) {
+    struct msghdr message; memset(&message, 0, sizeof message);
+    while (recvmsg(fd, &message, MSG_ERRQUEUE | MSG_DONTWAIT) >= 0) {}
+}
 /* An expired SO_RCVTIMEO or SO_SNDTIMEO is EAGAIN too; on a blocking descriptor that is the timeout. */
 static uint32_t waited(int fd) {
     int code = errno;
+    if (code != EAGAIN) forget_errors(fd);
     return code == EAGAIN && !(fcntl(fd, F_GETFL) & O_NONBLOCK) ? DOTNET_PAL_TIMEOUT : status_of(code);
 }
-static socklen_t to_native(const dotnet_pal_socket_address *address, struct sockaddr_storage *out) {
+static socklen_t to_native(int fd, const dotnet_pal_socket_address *address, struct sockaddr_storage *out) {
+    uint16_t port = is_raw(fd) ? 0 : address->port;
     memset(out, 0, sizeof *out);
     if (address->family == DOTNET_PAL_FAMILY_IPV4) {
         struct sockaddr_in v4 = {0};
-        v4.sin_family = AF_INET; v4.sin_port = htons(address->port); memcpy(&v4.sin_addr, address->address, 4);
+        v4.sin_family = AF_INET; v4.sin_port = htons(port); memcpy(&v4.sin_addr, address->address, 4);
         memcpy(out, &v4, sizeof v4); return sizeof v4;
     }
     if (address->family == DOTNET_PAL_FAMILY_IPV6) {
         struct sockaddr_in6 v6 = {0};
-        v6.sin6_family = AF_INET6; v6.sin6_port = htons(address->port); v6.sin6_scope_id = address->scope; memcpy(&v6.sin6_addr, address->address, 16);
+        v6.sin6_family = AF_INET6; v6.sin6_port = htons(port); v6.sin6_scope_id = address->scope; memcpy(&v6.sin6_addr, address->address, 16);
         memcpy(out, &v6, sizeof v6); return sizeof v6;
     }
     return 0;
@@ -95,16 +108,24 @@ static int from_native(const void *native, socklen_t length, dotnet_pal_socket_a
     if (family == AF_UNIX) { out->family = DOTNET_PAL_FAMILY_LOCAL; return 1; } /* the path is the local_sockets group's to report */
     return 0;
 }
+/* An address as the socket behind fd reports it. */
+static int reported(int fd, const void *native, socklen_t length, dotnet_pal_socket_address *out) {
+    if (!from_native(native, length, out)) return 0;
+    if (is_raw(fd)) out->port = 0;
+    return 1;
+}
 static uint32_t socket_create(uint32_t family, uint32_t kind, void **out) {
     if (pal_sockets_fault == 2) { *out = NULL; return DOTNET_PAL_OK; } /* success without a handle */
     int domain = family == DOTNET_PAL_FAMILY_LOCAL ? AF_UNIX : family == DOTNET_PAL_FAMILY_IPV6 ? AF_INET6 : AF_INET;
-    int fd = socket(domain, (kind == DOTNET_PAL_SOCKET_DATAGRAM ? SOCK_DGRAM : SOCK_STREAM) | SOCK_CLOEXEC, 0);
-    if (fd < 0) return status_of(errno);
+    int raw = kind == DOTNET_PAL_SOCKET_RAW, type = raw ? SOCK_RAW : kind == DOTNET_PAL_SOCKET_DATAGRAM ? SOCK_DGRAM : SOCK_STREAM;
+    if (raw && domain == AF_UNIX) return DOTNET_PAL_INVALID_ARGUMENT;
+    int fd = socket(domain, type | SOCK_CLOEXEC, !raw ? 0 : domain == AF_INET6 ? IPPROTO_ICMPV6 : IPPROTO_ICMP);
+    if (fd < 0) return status_of(errno); /* EPERM without CAP_NET_RAW */
     *out = fresh(fd); return DOTNET_PAL_OK;
 }
 static uint32_t socket_close(void *socket) { return close(to_fd(socket)) == 0 || errno == EINTR ? DOTNET_PAL_OK : status_of(errno); }
 static uint32_t socket_bind(void *socket, const dotnet_pal_socket_address *address) {
-    struct sockaddr_storage native; socklen_t length = to_native(address, &native);
+    struct sockaddr_storage native; socklen_t length = to_native(to_fd(socket), address, &native);
     return length == 0 || is_local(to_fd(socket)) ? DOTNET_PAL_INVALID_ARGUMENT : result(bind(to_fd(socket), (struct sockaddr*)&native, length));
 }
 static uint32_t socket_listen(void *socket, uint32_t backlog) { return result(listen(to_fd(socket), backlog > INT_MAX ? INT_MAX : (int)backlog)); }
@@ -122,8 +143,11 @@ static uint32_t pending_error(int fd, int *code) {
     return result(getsockopt(fd, SOL_SOCKET, SO_ERROR, code, &length));
 }
 static uint32_t socket_connect(void *socket, const dotnet_pal_socket_address *address) {
-    struct sockaddr_storage native; socklen_t length = to_native(address, &native); int fd = to_fd(socket), code;
+    struct sockaddr_storage native; int fd = to_fd(socket), code; socklen_t length = to_native(fd, address, &native);
     if (length == 0 || is_local(fd)) return DOTNET_PAL_INVALID_ARGUMENT;
+    /* getpeername calls a socket whose peer has port 0 not connected, and a raw socket's peer has no port: the connect names the protocol number,
+     * as the kernel does for such a socket's local port. sin_port and sin6_port are the same two bytes. */
+    if (is_raw(fd)) ((struct sockaddr_in*)&native)->sin_port = htons((uint16_t)own(fd, SO_PROTOCOL));
     if (connect(fd, (struct sockaddr*)&native, length) == 0) return DOTNET_PAL_OK;
     if (errno != EINTR) return status_of(errno);
     /* The interrupted attempt is still running: its result arrives as writability. */
@@ -134,7 +158,7 @@ static uint32_t socket_connect(void *socket, const dotnet_pal_socket_address *ad
 }
 static uint32_t socket_send(void *socket, const uint8_t *data, size_t size, const dotnet_pal_socket_address *to, size_t *sent) {
     if (pal_sockets_fault == 2) { *sent = size + 1; return DOTNET_PAL_OK; } /* more than was offered */
-    struct sockaddr_storage native; socklen_t length = to ? to_native(to, &native) : 0; ssize_t n;
+    struct sockaddr_storage native; socklen_t length = to ? to_native(to_fd(socket), to, &native) : 0; ssize_t n;
     if (to && (length == 0 || is_local(to_fd(socket)))) return DOTNET_PAL_INVALID_ARGUMENT;
     do n = to ? sendto(to_fd(socket), data, size, MSG_NOSIGNAL, (struct sockaddr*)&native, length) : send(to_fd(socket), data, size, MSG_NOSIGNAL);
     while (n < 0 && errno == EINTR);
@@ -147,7 +171,7 @@ static uint32_t socket_receive(void *socket, uint8_t *data, size_t capacity, uin
     do { length = sizeof native; n = recvfrom(to_fd(socket), data, capacity, (flags & DOTNET_PAL_RECEIVE_PEEK) ? MSG_PEEK : 0, (struct sockaddr*)&native, &length); }
     while (n < 0 && errno == EINTR);
     if (n < 0) return waited(to_fd(socket));
-    if (from) from_native(&native, length, from); /* a stream leaves the caller's zero address */
+    if (from) reported(to_fd(socket), &native, length, from); /* a stream leaves the caller's zero address */
     /* The kernel names a local sender by whether it has a path, stream or not. A local stream names none, like any stream, and the
      * sender of a local datagram is a local socket, whatever its name. */
     if (from && is_local(to_fd(socket))) { memset(from, 0, sizeof *from); if (own(to_fd(socket), SO_TYPE) == SOCK_DGRAM) from->family = DOTNET_PAL_FAMILY_LOCAL; }
@@ -159,14 +183,14 @@ static uint32_t socket_shutdown(void *socket, uint32_t how) {
 static uint32_t socket_local(void *socket, dotnet_pal_socket_address *out) {
     struct sockaddr_storage native; socklen_t length = sizeof native;
     if (getsockname(to_fd(socket), (struct sockaddr*)&native, &length) != 0) return status_of(errno);
-    if (!from_native(&native, length, out)) return DOTNET_PAL_OS_ERROR;
+    if (!reported(to_fd(socket), &native, length, out)) return DOTNET_PAL_OS_ERROR;
     if (pal_sockets_fault == 2) out->family = 0; /* success without an address */
     return DOTNET_PAL_OK;
 }
 static uint32_t socket_peer(void *socket, dotnet_pal_socket_address *out) {
     struct sockaddr_storage native; socklen_t length = sizeof native;
     if (getpeername(to_fd(socket), (struct sockaddr*)&native, &length) != 0) return status_of(errno);
-    return from_native(&native, length, out) ? DOTNET_PAL_OK : DOTNET_PAL_OS_ERROR;
+    return reported(to_fd(socket), &native, length, out) ? DOTNET_PAL_OK : DOTNET_PAL_OS_ERROR;
 }
 static uint32_t socket_blocking(void *socket, uint32_t blocking) {
     int flags = fcntl(to_fd(socket), F_GETFL);
@@ -185,7 +209,8 @@ static int plain_option(uint32_t option, int *level, int *name) {
     default: return 0;
     }
 }
-/* The hop limits and the multicast options live at the level of the socket's family; 0 for an option that is none of them. */
+/* The hop limits, the multicast options and the packet information live at the level of the socket's family, the fragmentation
+ * switch at IPv4's; 0 for an option that is none of them. */
 static int family_option(uint32_t option, int v6, int *level, int *name) {
     *level = v6 ? IPPROTO_IPV6 : IPPROTO_IP;
     switch (option) {
@@ -193,6 +218,9 @@ static int family_option(uint32_t option, int v6, int *level, int *name) {
     case DOTNET_PAL_SOCKET_MULTICAST_HOPS: *name = v6 ? IPV6_MULTICAST_HOPS : IP_MULTICAST_TTL; return 1;
     case DOTNET_PAL_SOCKET_MULTICAST_LOOPBACK: *name = v6 ? IPV6_MULTICAST_LOOP : IP_MULTICAST_LOOP; return 1;
     case DOTNET_PAL_SOCKET_MULTICAST_INTERFACE: *name = v6 ? IPV6_MULTICAST_IF : IP_MULTICAST_IF; return 1;
+    case DOTNET_PAL_SOCKET_PACKET_INFORMATION: *name = v6 ? IPV6_RECVPKTINFO : IP_PKTINFO; return 1;
+    case DOTNET_PAL_SOCKET_DONT_FRAGMENT: *level = IPPROTO_IP; *name = IP_MTU_DISCOVER; return 1;
+    case DOTNET_PAL_SOCKET_RECEIVE_ERRORS: *name = v6 ? IPV6_RECVERR : IP_RECVERR; return 1;
     default: return 0;
     }
 }
@@ -207,14 +235,17 @@ static uint32_t shape(int fd, uint32_t option, int *v6) {
     length = sizeof domain;
     if (getsockopt(fd, SOL_SOCKET, SO_DOMAIN, &domain, &length) != 0) return status_of(errno);
     *v6 = domain == AF_INET6;
-    if (domain == AF_UNIX) return DOTNET_PAL_UNSUPPORTED; /* neither TCP tuning nor hop limits nor multicast */
+    if (domain == AF_UNIX) return DOTNET_PAL_UNSUPPORTED; /* neither TCP tuning nor hop limits nor multicast nor packets */
     if (keep_alive_option(option) && type != SOCK_STREAM) return DOTNET_PAL_UNSUPPORTED;
-    if (option >= DOTNET_PAL_SOCKET_MULTICAST_HOPS && option <= DOTNET_PAL_SOCKET_MULTICAST_INTERFACE && type != SOCK_DGRAM) return DOTNET_PAL_UNSUPPORTED;
+    /* A stream has no datagrams to send to a group, to describe or to hear the network's complaints about (the kernel would take IP_RECVERR on one). */
+    if (((option >= DOTNET_PAL_SOCKET_MULTICAST_HOPS && option <= DOTNET_PAL_SOCKET_PACKET_INFORMATION) || option == DOTNET_PAL_SOCKET_RECEIVE_ERRORS) && type == SOCK_STREAM) return DOTNET_PAL_UNSUPPORTED;
+    /* The kernel would set IP_MTU_DISCOVER on an IPv6 socket; the option is IPv4's. */
+    if (option == DOTNET_PAL_SOCKET_DONT_FRAGMENT && *v6) return DOTNET_PAL_UNSUPPORTED;
     return DOTNET_PAL_OK;
 }
 static uint32_t socket_get_option(void *socket, uint32_t option, uint64_t *value) {
     int fd = to_fd(socket), level, name, number = 0, v6 = 0; socklen_t length = sizeof number;
-    if (option >= DOTNET_PAL_SOCKET_KEEP_ALIVE_IDLE && option <= DOTNET_PAL_SOCKET_MULTICAST_INTERFACE) {
+    if (option >= DOTNET_PAL_SOCKET_KEEP_ALIVE_IDLE && option <= DOTNET_PAL_SOCKET_RECEIVE_ERRORS) {
         uint32_t status = shape(fd, option, &v6);
         if (status != DOTNET_PAL_OK) return status;
         if (option == DOTNET_PAL_SOCKET_MULTICAST_INTERFACE && !v6) {
@@ -223,7 +254,9 @@ static uint32_t socket_get_option(void *socket, uint32_t option, uint64_t *value
         }
         if (keep_alive_option(option)) { level = IPPROTO_TCP; name = keep_alive_option(option); } else family_option(option, v6, &level, &name);
         if (getsockopt(fd, level, name, &number, &length) != 0) return status_of(errno);
-        *value = option == DOTNET_PAL_SOCKET_MULTICAST_LOOPBACK ? (uint64_t)(number != 0) : number < 0 ? 0 : (uint64_t)number;
+        /* What nobody set is WANT, which fragments a datagram that is too long; PROBE sets the bit as DO does. */
+        if (option == DOTNET_PAL_SOCKET_DONT_FRAGMENT) *value = number == IP_PMTUDISC_DO || number == IP_PMTUDISC_PROBE;
+        else *value = option == DOTNET_PAL_SOCKET_MULTICAST_LOOPBACK || option >= DOTNET_PAL_SOCKET_PACKET_INFORMATION ? (uint64_t)(number != 0) : number < 0 ? 0 : (uint64_t)number;
         return DOTNET_PAL_OK;
     }
     if (plain_option(option, &level, &name)) {
@@ -247,6 +280,7 @@ static uint32_t socket_get_option(void *socket, uint32_t option, uint64_t *value
         if (pal_sockets_fault == 2) { *value = calls++ % 2 ? UINT64_C(0x100000000) | DOTNET_PAL_CONNECTION_REFUSED : 99; return DOTNET_PAL_OK; }
         uint32_t status = pending_error(fd, &number);
         if (status == DOTNET_PAL_OK) *value = status_of(number);
+        if (number != 0) forget_errors(fd);
         return status;
     }
     if (option == DOTNET_PAL_SOCKET_AVAILABLE) {
@@ -257,9 +291,12 @@ static uint32_t socket_get_option(void *socket, uint32_t option, uint64_t *value
 }
 static uint32_t socket_set_option(void *socket, uint32_t option, uint64_t value) {
     int fd = to_fd(socket), level, name, number = value > INT_MAX ? INT_MAX : (int)value, v6 = 0;
-    if (option >= DOTNET_PAL_SOCKET_KEEP_ALIVE_IDLE && option <= DOTNET_PAL_SOCKET_MULTICAST_INTERFACE) {
+    if (option >= DOTNET_PAL_SOCKET_KEEP_ALIVE_IDLE && option <= DOTNET_PAL_SOCKET_RECEIVE_ERRORS) {
         uint32_t status = shape(fd, option, &v6);
         if (status != DOTNET_PAL_OK) return status;
+        if (option == DOTNET_PAL_SOCKET_DONT_FRAGMENT) number = value ? IP_PMTUDISC_DO : IP_PMTUDISC_DONT;
+        /* IPV6_RECVERR alone drops what ICMP reports about a datagram sent to an IPv4-mapped address; a raw IPv6 socket sends none and takes no IPv4 option. */
+        if (option == DOTNET_PAL_SOCKET_RECEIVE_ERRORS && v6 && !is_raw(fd) && setsockopt(fd, IPPROTO_IP, IP_RECVERR, &number, sizeof number) != 0) return status_of(errno);
         if (option == DOTNET_PAL_SOCKET_MULTICAST_INTERFACE && !v6) {
             struct ip_mreqn by_index = {{0}, {0}, number};
             if (fd >= TRACKED) return DOTNET_PAL_UNSUPPORTED;

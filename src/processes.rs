@@ -22,12 +22,12 @@ pub struct Spawned { pub process: *mut c_void, pub id: u64, pub input: *mut c_vo
 impl Spawned {
     pub const EMPTY: Self = Self { process: ptr::null_mut(), id: 0, input: ptr::null_mut(), output: ptr::null_mut(), error: ptr::null_mut() };
     /// A result a consumer can act on: a handle, an identifier, and exactly the pipes that were asked for.
-    fn consistent(&self, pipes: u32) -> bool {
+    pub(crate) fn consistent(&self, pipes: u32) -> bool {
         !self.process.is_null() && self.id != 0 && self.input.is_null() == (pipes & PIPE_INPUT == 0)
             && self.output.is_null() == (pipes & PIPE_OUTPUT == 0) && self.error.is_null() == (pipes & PIPE_ERROR == 0)
     }
 }
-type Texts = *const *const u8;
+pub(crate) type Texts = *const *const u8;
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Ops {
@@ -70,30 +70,35 @@ unsafe fn texts<'a>(list: Texts, count: usize) -> Option<&'a [*const u8]> {
     let list = unsafe { core::slice::from_raw_parts(list, count) };
     list.iter().all(|text| !text.is_null()).then_some(list)
 }
+/// What a spawn request names, borrowed from the caller; `None` for a request no provider should see.
+pub(crate) type Request<'a> = (&'a [u8], &'a [*const u8], Option<&'a [*const u8]>, Option<&'a [u8]>);
 #[allow(clippy::too_many_arguments)]
-unsafe extern "C" fn spawn<S: Processes>(program: *const u8, program_length: usize, arguments: Texts, argument_count: usize, environment: Texts,
-    environment_count: usize, directory: *const u8, directory_length: usize, pipes: u32, out: *mut Spawned, size: usize) -> u32 {
-    if !aligned_output(out) || size < mem::size_of::<Spawned>() { return record(INVALID_ARGUMENT, 0); }
-    unsafe { out.write(Spawned::EMPTY) };
-    let Some(program) = (unsafe { io::path(program, program_length) }) else { return record(INVALID_ARGUMENT, 0); };
+pub(crate) unsafe fn request<'a>(program: *const u8, program_length: usize, arguments: Texts, argument_count: usize, environment: Texts, environment_count: usize,
+    directory: *const u8, directory_length: usize, pipes: u32) -> Option<Request<'a>> {
+    let program = unsafe { io::path(program, program_length) }?;
     // Argument 0 is the program's own name: an empty vector is not a vector a program can start with.
-    let Some(arguments) = (unsafe { texts(arguments, argument_count) }).filter(|list| !list.is_empty()) else { return record(INVALID_ARGUMENT, 0); };
-    let environment = if environment.is_null() && environment_count == 0 { None } else {
-        match unsafe { texts(environment, environment_count) } { Some(list) => Some(list), None => return record(INVALID_ARGUMENT, 0) }
-    };
+    let arguments = unsafe { texts(arguments, argument_count) }.filter(|list| !list.is_empty())?;
+    let environment = if environment.is_null() && environment_count == 0 { None } else { Some(unsafe { texts(environment, environment_count) }?) };
     // NAME=value with a name: what every target can hand to a child, and what the child can read back.
     if let Some(list) = environment {
         for entry in list {
             // SAFETY: NUL-terminated texts are the caller's contract; the scan ends at the first `=` or NUL.
             let mut at = 0;
             while !matches!(unsafe { entry.add(at).read() }, 0 | b'=') { at += 1; }
-            if at == 0 || unsafe { entry.add(at).read() } == 0 { return record(INVALID_ARGUMENT, 0); }
+            if at == 0 || unsafe { entry.add(at).read() } == 0 { return None; }
         }
     }
-    let directory = if directory.is_null() && directory_length == 0 { None } else {
-        match unsafe { io::path(directory, directory_length) } { Some(path) => Some(path), None => return record(INVALID_ARGUMENT, 0) }
-    };
-    if pipes & !(PIPE_INPUT | PIPE_OUTPUT | PIPE_ERROR) != 0 { return record(INVALID_ARGUMENT, 0); }
+    let directory = if directory.is_null() && directory_length == 0 { None } else { Some(unsafe { io::path(directory, directory_length) }?) };
+    if pipes & !(PIPE_INPUT | PIPE_OUTPUT | PIPE_ERROR) != 0 { return None; }
+    Some((program, arguments, environment, directory))
+}
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn spawn<S: Processes>(program: *const u8, program_length: usize, arguments: Texts, argument_count: usize, environment: Texts,
+    environment_count: usize, directory: *const u8, directory_length: usize, pipes: u32, out: *mut Spawned, size: usize) -> u32 {
+    if !aligned_output(out) || size < mem::size_of::<Spawned>() { return record(INVALID_ARGUMENT, 0); }
+    unsafe { out.write(Spawned::EMPTY) };
+    let Some((program, arguments, environment, directory)) = (unsafe { request(program, program_length, arguments, argument_count, environment, environment_count,
+        directory, directory_length, pipes) }) else { return record(INVALID_ARGUMENT, 0); };
     let status = match unsafe { S::spawn(program, arguments, environment, directory, pipes) } {
         Ok(spawned) if spawned.consistent(pipes) => { unsafe { out.write(spawned) }; OK }
         Ok(_) => OS_ERROR, // a child the consumer cannot hold or pipes it did not ask for: a broken provider

@@ -124,6 +124,10 @@ pub fn validate() -> bool {
     if !accounts::validate() { return false; }
     #[cfg(feature = "host-priority")]
     if !priority::validate() { return false; }
+    #[cfg(feature = "host-packets")]
+    if !packets::validate() { return false; }
+    #[cfg(feature = "host-spawn-as")]
+    if !spawn_as::validate() { return false; }
     true
 }
 
@@ -1137,6 +1141,56 @@ pub mod priority {
         fn set(process: u64, value: i32) -> Result<()> {
             let Some(f) = TABLE.get().and_then(|t| t.ops.set) else { return Err(Error::Unsupported); };
             port::from_status(unsafe { f(process, value) })
+        }
+    }
+}
+
+#[cfg(feature = "host-packets")]
+pub mod packets {
+    use super::*;
+    use crate::packets::{Host as Table, Info, CAP};
+    use crate::sockets::Address;
+    extern "C" { fn dotnet_pal_host_packets_v2() -> *const Table; }
+    static TABLE: Cached<Table> = Cached::new();
+    pub fn validate() -> bool {
+        let Some(t) = (unsafe { table(dotnet_pal_host_packets_v2(), CAP) }) else { return false; };
+        if t.ops.receive.is_none() { return false; }
+        TABLE.set(t);
+        true
+    }
+    impl port::Packets for Host {
+        unsafe fn receive(socket: *mut c_void, data: *mut u8, capacity: usize, flags: u32) -> Result<(usize, Option<Address>, Info)> {
+            let Some(f) = TABLE.get().and_then(|t| t.ops.receive) else { return Err(Error::Unsupported); };
+            let (mut from, mut info, mut received) = (Address::default(), Info::default(), 0);
+            port::from_status(unsafe { f(socket, data, capacity, flags, &mut from, &mut info, core::mem::size_of::<Info>(), &mut received) })?;
+            Ok((received, (from.family != 0).then_some(from), info))
+        }
+    }
+}
+
+#[cfg(feature = "host-spawn-as")]
+pub mod spawn_as {
+    use super::*;
+    use crate::processes::Spawned;
+    use crate::spawn_as::{Host as Table, Identity, CAP};
+    extern "C" { fn dotnet_pal_host_spawn_as_v2() -> *const Table; }
+    static TABLE: Cached<Table> = Cached::new();
+    pub fn validate() -> bool {
+        let Some(t) = (unsafe { table(dotnet_pal_host_spawn_as_v2(), CAP) }) else { return false; };
+        if t.ops.spawn_as.is_none() { return false; }
+        TABLE.set(t);
+        true
+    }
+    impl port::SpawnAs for Host {
+        unsafe fn spawn_as(program: &[u8], arguments: &[*const u8], environment: Option<&[*const u8]>, directory: Option<&[u8]>, pipes: u32,
+            user_id: u32, group_id: u32, groups: &[u32]) -> Result<Spawned> {
+            let Some(f) = TABLE.get().and_then(|t| t.ops.spawn_as) else { return Err(Error::Unsupported); };
+            let identity = Identity { user_id, group_id, groups: if groups.is_empty() { ptr::null() } else { groups.as_ptr() }, group_count: groups.len() };
+            let mut out = Spawned::EMPTY;
+            port::from_status(unsafe { f(program.as_ptr(), program.len(), arguments.as_ptr(), arguments.len(), environment.map_or(ptr::null(), |e| e.as_ptr()),
+                environment.map_or(0, |e| e.len()), directory.map_or(ptr::null(), |d| d.as_ptr()), directory.map_or(0, |d| d.len()), pipes, &identity, &mut out,
+                core::mem::size_of::<Spawned>()) })?;
+            Ok(out)
         }
     }
 }

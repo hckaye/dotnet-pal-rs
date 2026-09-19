@@ -73,6 +73,10 @@ jobs:
         run: bash scripts/accounts.sh
       - name: Process priorities
         run: bash scripts/priority.sh
+      - name: Packet information and raw ICMP sockets
+        run: bash scripts/packets.sh
+      - name: Children under another identity
+        run: bash scripts/spawn-as.sh
       - name: Native signal and activation contracts
         run: bash scripts/context.sh
       - name: Demand-allocated linear storage and eight-thread failure contracts

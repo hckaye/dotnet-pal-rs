@@ -576,6 +576,23 @@ pub trait Priority {
     fn get(process: u64) -> Result<i32>;
     fn set(process: u64, value: i32) -> Result<()>;
 }
+/// Where a datagram arrived (`CAP_PACKETS`). `socket` is a handle of [`Sockets`], so the
+/// type that provides that trait provides this one.
+pub trait Packets {
+    const PROVIDED: bool = true;
+    /// `Sockets::receive` with the interface and the destination of the datagram, which the
+    /// option `sockets::PACKET_INFORMATION` has to ask for before the datagram arrives.
+    #[allow(clippy::type_complexity)]
+    unsafe fn receive(socket: *mut c_void, data: *mut u8, capacity: usize, flags: u32) -> Result<(usize, Option<crate::sockets::Address>, crate::packets::Info)>;
+}
+/// A child started as another user (`CAP_SPAWN_AS`). The result is a child of
+/// [`Processes`], so the type that provides that trait provides this one.
+pub trait SpawnAs {
+    const PROVIDED: bool = true;
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn spawn_as(program: &[u8], arguments: &[*const u8], environment: Option<&[*const u8]>, directory: Option<&[u8]>, pipes: u32,
+        user_id: u32, group_id: u32, groups: &[u32]) -> Result<crate::processes::Spawned>;
+}
 /// Terminates the process or instance after an internal invariant failure.
 pub trait Abort {
     fn abort() -> !;
@@ -799,6 +816,12 @@ absent!(Priority {
     fn get(_: u64) -> Result<i32> { Err(Error::Unsupported) }
     fn set(_: u64, _: i32) -> Result<()> { Err(Error::Unsupported) }
 });
+absent!(Packets {
+    unsafe fn receive(_: *mut c_void, _: *mut u8, _: usize, _: u32) -> Result<(usize, Option<crate::sockets::Address>, crate::packets::Info)> { Err(Error::Unsupported) }
+});
+absent!(SpawnAs {
+    unsafe fn spawn_as(_: &[u8], _: &[*const u8], _: Option<&[*const u8]>, _: Option<&[u8]>, _: u32, _: u32, _: u32, _: &[u32]) -> Result<crate::processes::Spawned> { Err(Error::Unsupported) }
+});
 absent!(Image {
     unsafe fn unwind_info(_: usize) -> Result<crate::image::UnwindInfo> { Err(Error::Unsupported) }
     unsafe fn readable(_: usize, _: usize) -> Result<bool> { Err(Error::Unsupported) }
@@ -851,6 +874,8 @@ pub trait Port {
     type LocalSockets: LocalSockets;
     type Accounts: Accounts;
     type Priority: Priority;
+    type Packets: Packets;
+    type SpawnAs: SpawnAs;
     type Abort: Abort;
     fn validate() -> bool { true }
 }
@@ -923,6 +948,8 @@ macro_rules! declare_port {
             type LocalSockets = $crate::__port_lookup!(LocalSockets; $($key = $provider),*);
             type Accounts = $crate::__port_lookup!(Accounts; $($key = $provider),*);
             type Priority = $crate::__port_lookup!(Priority; $($key = $provider),*);
+            type Packets = $crate::__port_lookup!(Packets; $($key = $provider),*);
+            type SpawnAs = $crate::__port_lookup!(SpawnAs; $($key = $provider),*);
             type Abort = $crate::__port_lookup!(Abort; $($key = $provider),*);
         }
     };
@@ -971,6 +998,8 @@ macro_rules! __port_lookup {
     (LocalSockets; LocalSockets = $t:ty $(, $($rest:tt)*)?) => { $t };
     (Accounts; Accounts = $t:ty $(, $($rest:tt)*)?) => { $t };
     (Priority; Priority = $t:ty $(, $($rest:tt)*)?) => { $t };
+    (Packets; Packets = $t:ty $(, $($rest:tt)*)?) => { $t };
+    (SpawnAs; SpawnAs = $t:ty $(, $($rest:tt)*)?) => { $t };
     (Abort; Abort = $t:ty $(, $($rest:tt)*)?) => { $t };
     ($want:ident; $other:ident = $t:ty $(, $($rest:tt)*)?) => { $crate::__port_lookup!($want; $($($rest)*)?) };
     (Abort;) => { $crate::port::Trap };

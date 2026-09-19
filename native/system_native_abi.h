@@ -67,8 +67,9 @@ typedef struct { uint8_t* Base; uintptr_t Count; } IOVector;
 typedef enum { PAL_LOG_EMERG = 0, PAL_LOG_ALERT = 1, PAL_LOG_CRIT = 2, PAL_LOG_ERR = 3, PAL_LOG_WARNING = 4, PAL_LOG_NOTICE = 5, PAL_LOG_INFO = 6, PAL_LOG_DEBUG = 7 } SysLogPriority;
 /* Networking (pal_networking.h and Common/pal_networking_common.h): the subset the boundary's sockets group can express. */
 typedef enum { AddressFamily_AF_UNKNOWN = -1, AddressFamily_AF_UNSPEC = 0, AddressFamily_AF_UNIX = 1, AddressFamily_AF_INET = 2, AddressFamily_AF_INET6 = 23 } AddressFamily;
-typedef enum { SocketType_UNKNOWN = -1, SocketType_SOCK_STREAM = 1, SocketType_SOCK_DGRAM = 2 } SocketType;
-typedef enum { ProtocolType_PT_UNKNOWN = -1, ProtocolType_PT_UNSPECIFIED = 0, ProtocolType_PT_TCP = 6, ProtocolType_PT_UDP = 17 } ProtocolType;
+typedef enum { SocketType_UNKNOWN = -1, SocketType_SOCK_STREAM = 1, SocketType_SOCK_DGRAM = 2, SocketType_SOCK_RAW = 3 } SocketType;
+typedef enum { ProtocolType_PT_UNKNOWN = -1, ProtocolType_PT_UNSPECIFIED = 0, ProtocolType_PT_ICMP = 1, ProtocolType_PT_TCP = 6, ProtocolType_PT_UDP = 17,
+               ProtocolType_PT_ICMPV6 = 58 } ProtocolType;
 typedef enum { SocketShutdown_SHUT_READ = 0, SocketShutdown_SHUT_WRITE = 1, SocketShutdown_SHUT_BOTH = 2 } SocketShutdown;
 typedef enum { SocketOptionLevel_SOL_SOCKET = 0xffff, SocketOptionLevel_SOL_IP = 0, SocketOptionLevel_SOL_IPV6 = 41, SocketOptionLevel_SOL_TCP = 6, SocketOptionLevel_SOL_UDP = 17 } SocketOptionLevel;
 typedef enum {
@@ -78,7 +79,7 @@ typedef enum {
     SocketOptionName_SO_IPV6_V6ONLY = 27, SocketOptionName_SO_TCP_NODELAY = 1,
     SocketOptionName_SO_IP_TTL = 4, SocketOptionName_SO_IP_MULTICAST_IF = 9, SocketOptionName_SO_IP_MULTICAST_TTL = 10, SocketOptionName_SO_IP_MULTICAST_LOOP = 11,
     SocketOptionName_SO_IPV6_HOPLIMIT = 21, SocketOptionName_SO_TCP_KEEPALIVE_RETRYCOUNT = 16, SocketOptionName_SO_TCP_KEEPALIVE_TIME = 3,
-    SocketOptionName_SO_TCP_KEEPALIVE_INTERVAL = 17,
+    SocketOptionName_SO_TCP_KEEPALIVE_INTERVAL = 17, SocketOptionName_SO_IP_DONTFRAGMENT = 14, SocketOptionName_SO_IP_PKTINFO = 19,
 } SocketOptionName;
 typedef enum { MulticastOption_MULTICAST_ADD = 0, MulticastOption_MULTICAST_DROP = 1, MulticastOption_MULTICAST_IF = 2 } MulticastOption;
 typedef enum { GetAddrInfoErrorFlags_NI_NAMEREQD = 0x1, GetAddrInfoErrorFlags_NI_NUMERICHOST = 0x2 } GetNameInfoFlags;

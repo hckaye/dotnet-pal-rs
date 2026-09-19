@@ -45,6 +45,38 @@
 //! a stream that has one, macOS gives a datagram's sender without one an empty name;
 //! both measured). Windows has no provider for them: the family is UNSUPPORTED there.
 //!
+//! A raw socket speaks its family's ICMP and needs a privilege: CAP_NET_RAW on Linux,
+//! root on macOS, where `socket` answers EPERM otherwise, which is ACCESS_DENIED here.
+//! macOS gives an unprivileged process ICMP through a datagram socket instead; that is
+//! not offered under the raw kind, because it is not the same socket: IP_RECVPKTINFO is
+//! EINVAL on it (measured on Darwin 25). A raw socket has no ports. Linux reports its
+//! protocol number as its local port, keeps the port a connect named, and reads the port
+//! an IPv6 send names as a protocol number (EINVAL for any but 58, all measured), so the
+//! port of an address that goes to a raw socket is dropped and every address it reports
+//! has port 0; only a connect on Linux names a port, the protocol number, because its
+//! getpeername calls a socket whose peer has port 0 not connected (measured). Windows
+//! has no raw kind here: UNSUPPORTED.
+//!
+//! PACKET_INFORMATION is IP_PKTINFO (IP_RECVPKTINFO on macOS, the same number) or
+//! IPV6_RECVPKTINFO by the socket's family. An IPv6 socket that also takes IPv4 traffic
+//! needs nothing more: both systems describe an IPv4 datagram there by IPV6_PKTINFO with
+//! the IPv4-mapped destination, the form its sender has too, and macOS refuses IP_PKTINFO
+//! on an IPv6 socket (EINVAL; all measured). DONT_FRAGMENT is IP_MTU_DISCOVER on Linux
+//! (DO when on, DONT when off; DO and PROBE read as on, the default WANT as off) and
+//! IP_DONTFRAG on macOS; macOS has EINVAL for it on an IPv6 socket and Linux would take
+//! it, so the answer for an IPv6 socket is made here. Both are UNSUPPORTED on Windows.
+//!
+//! RECEIVE_ERRORS is Linux's IP_RECVERR or IPV6_RECVERR by the socket's family, and both
+//! on an IPv6 datagram socket: IPV6_RECVERR alone drops what ICMP reports about a
+//! datagram sent to an IPv4-mapped address (measured). With the option Linux also keeps
+//! every such error in a queue of its own and calls the socket in error (POLLERR) for
+//! as long as that queue holds one, after the failing call has long reported it
+//! (measured); nothing in the boundary reads that queue and a level-triggered poll
+//! would report ERROR for ever, so whatever reports a failure of the socket empties it.
+//! macOS has no such option (none in its <netinet/in.h>; a datagram socket that is not
+//! connected never learns that nobody listened where it sent to, a connected one does;
+//! measured on Darwin 25): UNSUPPORTED there and on Windows.
+//!
 //! Names are resolved with getaddrinfo itself on Unix: std turns its failure code
 //! into text, which cannot tell a name without addresses from an answer that could
 //! not be obtained. On Windows std keeps the Winsock code, so `ToSocketAddrs` is
@@ -52,18 +84,25 @@
 use super::{borrow, boxed, take, Std};
 use dotnet_pal_rs::kernel::INFINITE;
 use dotnet_pal_rs::port::{self, Error, Result};
-use dotnet_pal_rs::sockets::{self, Address, PollEntry, DATAGRAM, IPV4, IPV6, LOCAL, POLL_ERROR, POLL_HANGUP, POLL_READ, POLL_WRITE, RECEIVE_PEEK, STREAM};
+use dotnet_pal_rs::sockets::{self, Address, PollEntry, DATAGRAM, IPV4, IPV6, LOCAL, POLL_ERROR, POLL_HANGUP, POLL_READ, POLL_WRITE, RAW, RECEIVE_PEEK, STREAM};
 use socket2::{Domain, MaybeUninitSlice, SockAddr, Type};
 use std::{collections::HashMap, ffi::c_void, io, mem::MaybeUninit, net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV6}, ptr};
 use std::{sync::{atomic::{AtomicBool, AtomicU32, Ordering}, OnceLock}, time::{Duration, Instant}};
 
-/// The calls of the network and local_sockets groups take these handles, hence the visibility.
-pub(crate) struct Socket { pub(crate) inner: socket2::Socket, blocking: AtomicBool, pub(crate) stream: bool, pub(crate) v6: bool, pub(crate) local: bool, multicast_interface: AtomicU32 }
+/// The calls of the network, local_sockets and packets groups take these handles, hence the visibility.
+pub(crate) struct Socket { pub(crate) inner: socket2::Socket, blocking: AtomicBool, pub(crate) stream: bool, pub(crate) v6: bool, pub(crate) local: bool, raw: bool, multicast_interface: AtomicU32 }
 /// What every endpoint of a local socket answers with: its path is the local_sockets group's to report.
 const BARE: Address = Address { family: LOCAL as u16, port: 0, scope: 0, address: [0; 16] };
 impl Socket {
-    fn wrap(inner: socket2::Socket, stream: bool, v6: bool, local: bool) -> *mut c_void {
-        boxed(Self { inner, blocking: AtomicBool::new(true), stream, v6, local, multicast_interface: AtomicU32::new(0) })
+    fn wrap(inner: socket2::Socket, stream: bool, v6: bool, local: bool, raw: bool) -> *mut c_void {
+        boxed(Self { inner, blocking: AtomicBool::new(true), stream, v6, local, raw, multicast_interface: AtomicU32::new(0) })
+    }
+    /// An address as the socket takes or reports it: without its port when the socket is a raw one.
+    fn ported(&self, address: Address) -> Address { if self.raw { Address { port: 0, ..address } } else { address } }
+    /// Who sent what the socket received. A stream names no sender: the OS leaves the address empty and the answer is `None`.
+    /// A local datagram has a local sender, whatever the OS makes of its name.
+    pub(crate) fn sender(&self, named: &SockAddr) -> Option<Address> {
+        if self.local { (!self.stream).then_some(BARE) } else { named.as_socket().map(|address| self.ported(boundary(address))) }
     }
     /// The socket, for a call that takes an IP address: a local socket has none to bind, reach or send to.
     unsafe fn internet<'a>(socket: *mut c_void) -> Result<&'a Self> {
@@ -77,6 +116,9 @@ impl Socket {
             sockets::MULTICAST_HOPS | sockets::MULTICAST_LOOPBACK | sockets::MULTICAST_INTERFACE => self.stream || self.local,
             sockets::HOPS => self.local,
             sockets::IPV6_ONLY => !self.v6,
+            sockets::PACKET_INFORMATION => self.stream || self.local || cfg!(windows),
+            sockets::DONT_FRAGMENT => self.v6 || self.local || cfg!(windows),
+            sockets::RECEIVE_ERRORS => self.stream || self.local || !cfg!(any(target_os = "linux", target_os = "android")),
             _ => false,
         };
         if missing { Err(Error::Unsupported) } else { Ok(()) }
@@ -136,7 +178,7 @@ fn error(e: io::Error) -> Error {
 /// timeout with the error of a non-blocking socket that has nothing yet; the mode
 /// the handle was put in tells them apart without asking the OS.
 pub(crate) fn waited(socket: &Socket, e: io::Error) -> Error {
-    match error(e) { Error::WouldBlock if socket.blocking.load(Ordering::Relaxed) => Error::Timeout, other => other }
+    match error(e) { Error::WouldBlock if socket.blocking.load(Ordering::Relaxed) => Error::Timeout, Error::WouldBlock => Error::WouldBlock, other => { tuning::forget_errors(&socket.inner); other } }
 }
 pub(crate) fn retry<T>(mut call: impl FnMut() -> io::Result<T>) -> io::Result<T> {
     loop { match call() { Err(e) if e.kind() == io::ErrorKind::Interrupted => continue, other => return other } }
@@ -158,7 +200,7 @@ fn boundary(address: SocketAddr) -> Address {
 }
 fn endpoint(socket: &Socket, address: io::Result<SockAddr>) -> Result<Address> {
     let address = address.map_err(error)?;
-    if socket.local { Ok(BARE) } else { address.as_socket().map(boundary).ok_or(Error::Os) }
+    if socket.local { Ok(BARE) } else { address.as_socket().map(|address| socket.ported(boundary(address))).ok_or(Error::Os) }
 }
 
 #[cfg(unix)]
@@ -329,6 +371,53 @@ pub(crate) mod tuning {
     pub fn interface_v4(_: &impl AsRawFd, _: &AtomicU32) -> io::Result<u32> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
     #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
     pub fn set_interface_v4(_: &impl AsRawFd, _: u32, _: &AtomicU32) -> io::Result<()> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
+    /// `(level, name)` of the option that makes the OS describe where a datagram arrived. macOS calls the IPv4 one IP_RECVPKTINFO, the same number.
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+    fn packet_information(v6: bool) -> (i32, i32) { if v6 { (libc::IPPROTO_IPV6, libc::IPV6_RECVPKTINFO) } else { (libc::IPPROTO_IP, libc::IP_PKTINFO) } }
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+    pub fn reports_packets(socket: &impl AsRawFd, v6: bool) -> io::Result<bool> { let (level, name) = packet_information(v6); get(socket, level, name).map(|value| value != 0) }
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+    pub fn set_reports_packets(socket: &impl AsRawFd, v6: bool, on: bool) -> io::Result<()> { let (level, name) = packet_information(v6); set(socket, level, name, &(on as i32)) }
+    /// PROBE sets the bit as DO does and ignores the path's MTU on top of that.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub fn dont_fragment(socket: &impl AsRawFd) -> io::Result<bool> { get(socket, libc::IPPROTO_IP, libc::IP_MTU_DISCOVER).map(|value| matches!(value, libc::IP_PMTUDISC_DO | libc::IP_PMTUDISC_PROBE)) }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub fn set_dont_fragment(socket: &impl AsRawFd, on: bool) -> io::Result<()> { set(socket, libc::IPPROTO_IP, libc::IP_MTU_DISCOVER, &(if on { libc::IP_PMTUDISC_DO } else { libc::IP_PMTUDISC_DONT })) }
+    #[cfg(target_vendor = "apple")]
+    pub fn dont_fragment(socket: &impl AsRawFd) -> io::Result<bool> { get(socket, libc::IPPROTO_IP, libc::IP_DONTFRAG).map(|value| value != 0) }
+    #[cfg(target_vendor = "apple")]
+    pub fn set_dont_fragment(socket: &impl AsRawFd, on: bool) -> io::Result<()> { set(socket, libc::IPPROTO_IP, libc::IP_DONTFRAG, &(on as i32)) }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub fn receives_errors(socket: &impl AsRawFd, v6: bool) -> io::Result<bool> { if v6 { get(socket, libc::IPPROTO_IPV6, libc::IPV6_RECVERR) } else { get(socket, libc::IPPROTO_IP, libc::IP_RECVERR) }.map(|value| value != 0) }
+    /// What an IPv6 datagram socket sends to an IPv4-mapped address is IPv4's to report. A raw IPv6 socket sends no IPv4 and takes no IPv4 option.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub fn set_receives_errors(socket: &impl AsRawFd, v6: bool, raw: bool, on: bool) -> io::Result<()> {
+        if !v6 || !raw { set(socket, libc::IPPROTO_IP, libc::IP_RECVERR, &(on as i32))?; }
+        if v6 { set(socket, libc::IPPROTO_IPV6, libc::IPV6_RECVERR, &(on as i32))?; }
+        Ok(())
+    }
+    /// Empties the queue RECEIVE_ERRORS makes Linux keep: the failure that is being reported is all the boundary says about it.
+    /// Without the option the queue is empty and this is one call that finds nothing.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub fn forget_errors(socket: &impl AsRawFd) {
+        let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+        // No room for the datagram the error is about nor for its description: the entry leaves the queue all the same.
+        while unsafe { libc::recvmsg(socket.as_raw_fd(), &mut message, libc::MSG_ERRQUEUE | libc::MSG_DONTWAIT) } >= 0 {}
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    pub fn receives_errors(_: &impl AsRawFd, _: bool) -> io::Result<bool> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    pub fn set_receives_errors(_: &impl AsRawFd, _: bool, _: bool, _: bool) -> io::Result<()> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    pub fn forget_errors(_: &impl AsRawFd) {}
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+    pub fn reports_packets(_: &impl AsRawFd, _: bool) -> io::Result<bool> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+    pub fn set_reports_packets(_: &impl AsRawFd, _: bool, _: bool) -> io::Result<()> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+    pub fn dont_fragment(_: &impl AsRawFd) -> io::Result<bool> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+    pub fn set_dont_fragment(_: &impl AsRawFd, _: bool) -> io::Result<()> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
 }
 #[cfg(windows)]
 mod tuning {
@@ -355,6 +444,14 @@ mod tuning {
         if index >= 1 << 24 { return Err(io::Error::from(io::ErrorKind::InvalidInput)); }
         socket.set_multicast_if_v4(&Ipv4Addr::from(index))
     }
+    /// The socket's `has` answers for these three before they are reached.
+    pub fn receives_errors(_: &socket2::Socket, _: bool) -> io::Result<bool> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
+    pub fn set_receives_errors(_: &socket2::Socket, _: bool, _: bool, _: bool) -> io::Result<()> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
+    pub fn forget_errors(_: &socket2::Socket) {}
+    pub fn reports_packets(_: &socket2::Socket, _: bool) -> io::Result<bool> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
+    pub fn set_reports_packets(_: &socket2::Socket, _: bool, _: bool) -> io::Result<()> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
+    pub fn dont_fragment(_: &socket2::Socket) -> io::Result<bool> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
+    pub fn set_dont_fragment(_: &socket2::Socket, _: bool) -> io::Result<()> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
 }
 
 /// One wake channel: `wait` is readable from a `signal` until the channel's poll
@@ -484,11 +581,19 @@ impl port::Sockets for Std {
             LOCAL => return Err(Error::Unsupported),
             _ => return Err(Error::InvalidArgument),
         };
-        let shape = match kind { STREAM => Type::STREAM, DATAGRAM => Type::DGRAM, _ => return Err(Error::InvalidArgument) };
-        Ok(Socket::wrap(socket2::Socket::new(domain, shape, None).map_err(error)?, kind == STREAM, family == IPV6, family == LOCAL))
+        let (shape, protocol) = match kind {
+            STREAM => (Type::STREAM, None), DATAGRAM => (Type::DGRAM, None),
+            // `socket2` names the raw type behind a feature. Without the privilege the OS answers EPERM, which reads as ACCESS_DENIED.
+            #[cfg(unix)]
+            RAW if family != LOCAL => (Type::from(libc::SOCK_RAW), Some(if family == IPV6 { socket2::Protocol::ICMPV6 } else { socket2::Protocol::ICMPV4 })),
+            #[cfg(not(unix))]
+            RAW if family != LOCAL => return Err(Error::Unsupported),
+            _ => return Err(Error::InvalidArgument),
+        };
+        Ok(Socket::wrap(socket2::Socket::new(domain, shape, protocol).map_err(error)?, kind == STREAM, family == IPV6, family == LOCAL, kind == RAW))
     }
     unsafe fn close(socket: *mut c_void) -> Result<()> { drop(unsafe { take::<Socket>(socket) }?); Ok(()) }
-    unsafe fn bind(socket: *mut c_void, address: &Address) -> Result<()> { unsafe { Socket::internet(socket) }?.inner.bind(&native(address)?).map_err(error) }
+    unsafe fn bind(socket: *mut c_void, address: &Address) -> Result<()> { let socket = unsafe { Socket::internet(socket) }?; socket.inner.bind(&native(&socket.ported(*address))?).map_err(error) }
     unsafe fn listen(socket: *mut c_void, backlog: u32) -> Result<()> {
         unsafe { borrow::<Socket>(socket) }?.inner.listen(backlog.min(i32::MAX as u32) as i32).map_err(error)
     }
@@ -497,11 +602,17 @@ impl port::Sockets for Std {
         let (inner, peer) = retry(|| listener.inner.accept()).map_err(|e| waited(listener, e))?;
         // Outside Linux an accepted socket inherits the listener's non-blocking mode; the contract starts it blocking.
         if !listener.blocking.load(Ordering::Relaxed) { inner.set_nonblocking(false).map_err(error)?; }
-        Ok((Socket::wrap(inner, listener.stream, listener.v6, listener.local), if listener.local { BARE } else { peer.as_socket().map(boundary).unwrap_or_default() }))
+        Ok((Socket::wrap(inner, listener.stream, listener.v6, listener.local, false), if listener.local { BARE } else { peer.as_socket().map(boundary).unwrap_or_default() }))
     }
     unsafe fn connect(socket: *mut c_void, address: &Address) -> Result<()> {
         let socket = unsafe { Socket::internet(socket) }?;
-        match socket.inner.connect(&native(address)?) {
+        #[allow(unused_mut)]
+        let mut peer = socket.ported(*address);
+        // Linux calls a socket connected when its peer has a port (getpeername is ENOTCONN otherwise, measured), and a raw socket's peer has
+        // none: the connect names the protocol number, which is what Linux itself reports as such a socket's local port.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        if socket.raw { peer.port = if socket.v6 { libc::IPPROTO_ICMPV6 } else { libc::IPPROTO_ICMP } as u16; }
+        match socket.inner.connect(&native(&peer)?) {
             Ok(()) => Ok(()),
             // An interrupted connect carries on in the OS; a second call would report EALREADY. Wait for its outcome instead.
             #[cfg(unix)]
@@ -515,18 +626,21 @@ impl port::Sockets for Std {
     }
     unsafe fn send(socket: *mut c_void, data: *const u8, size: usize, to: Option<&Address>) -> Result<usize> {
         let socket = if to.is_some() { unsafe { Socket::internet(socket) } } else { unsafe { borrow::<Socket>(socket) } }?;
-        let (bytes, to) = (unsafe { std::slice::from_raw_parts(data, size) }, to.map(native).transpose()?);
+        let (bytes, to) = (unsafe { std::slice::from_raw_parts(data, size) }, to.map(|to| native(&socket.ported(*to))).transpose()?);
         retry(|| match &to { Some(to) => socket.inner.send_to_with_flags(bytes, to, ready::SEND), None => socket.inner.send_with_flags(bytes, ready::SEND) })
             .map_err(|e| waited(socket, e))
     }
     unsafe fn receive(socket: *mut c_void, out: *mut u8, capacity: usize, flags: u32) -> Result<(usize, Option<Address>)> {
         let socket = unsafe { borrow::<Socket>(socket) }?;
         let flags = if flags & RECEIVE_PEEK != 0 { ready::PEEK } else { 0 };
+        // macOS answers a datagram receive into no room at once and with nothing while no datagram is there, where Linux waits for one (both
+        // measured); with a datagram there both take it. One byte of room that is not reported makes every OS wait, or say that it would have to.
+        let mut spare = [MaybeUninit::<u8>::uninit()];
+        let room = if capacity == 0 && !socket.stream { &mut spare[..] } else { unsafe { std::slice::from_raw_parts_mut(out.cast::<MaybeUninit<u8>>(), capacity) } };
         // The vectored call is the one `socket2` lets end in a truncated datagram on Windows, where Winsock calls that an error.
-        let mut parts = [MaybeUninitSlice::new(unsafe { std::slice::from_raw_parts_mut(out.cast::<MaybeUninit<u8>>(), capacity) })];
+        let mut parts = [MaybeUninitSlice::new(room)];
         let (done, _, sender) = retry(|| socket.inner.recv_from_vectored_with_flags(&mut parts, flags)).map_err(|e| waited(socket, e))?;
-        // A stream names no sender: the OS leaves the address empty and the answer is `None`. A local datagram has a local sender.
-        Ok((done, if socket.local { (!socket.stream).then_some(BARE) } else { sender.as_socket().map(boundary) }))
+        Ok((done.min(capacity), socket.sender(&sender)))
     }
     unsafe fn shutdown(socket: *mut c_void, how: u32) -> Result<()> {
         let how = match how { sockets::SHUTDOWN_READ => Shutdown::Read, sockets::SHUTDOWN_WRITE => Shutdown::Write, sockets::SHUTDOWN_BOTH => Shutdown::Both, _ => return Err(Error::InvalidArgument) };
@@ -553,7 +667,7 @@ impl port::Sockets for Std {
             sockets::LINGER => s.linger().map(|l| l.map_or(0, |l| l.as_secs() + 1)),
             sockets::RECEIVE_TIMEOUT => timeout(s.read_timeout()), sockets::SEND_TIMEOUT => timeout(s.write_timeout()),
             // Reading the pending error clears it; it travels as the status the failing call would have reported.
-            sockets::ERROR => s.take_error().map(|e| e.map_or(dotnet_pal_rs::OK, |e| error(e).status()) as u64),
+            sockets::ERROR => s.take_error().map(|e| e.map_or(dotnet_pal_rs::OK, |e| { tuning::forget_errors(s); error(e).status() }) as u64),
             sockets::AVAILABLE => ready::available(s),
             sockets::KEEP_ALIVE_IDLE => tuning::get(s, tuning::TCP, tuning::IDLE).map(|v| v.max(0) as u64),
             sockets::KEEP_ALIVE_INTERVAL => tuning::get(s, tuning::TCP, tuning::INTERVAL).map(|v| v.max(0) as u64),
@@ -562,6 +676,8 @@ impl port::Sockets for Std {
             sockets::MULTICAST_HOPS => if socket.v6 { s.multicast_hops_v6() } else { s.multicast_ttl_v4() }.map(u64::from),
             sockets::MULTICAST_LOOPBACK => flag(if socket.v6 { s.multicast_loop_v6() } else { s.multicast_loop_v4() }),
             sockets::MULTICAST_INTERFACE => if socket.v6 { s.multicast_if_v6() } else { tuning::interface_v4(s, &socket.multicast_interface) }.map(u64::from),
+            sockets::PACKET_INFORMATION => flag(tuning::reports_packets(s, socket.v6)), sockets::DONT_FRAGMENT => flag(tuning::dont_fragment(s)),
+            sockets::RECEIVE_ERRORS => flag(tuning::receives_errors(s, socket.v6)),
             _ => return Err(Error::InvalidArgument),
         }.map_err(error)
     }
@@ -589,6 +705,8 @@ impl port::Sockets for Std {
             // The front end holds `value` to 32 bits.
             sockets::MULTICAST_INTERFACE if value != 0 && !tuning::exists(value as u32) => return Err(Error::AddressNotAvailable),
             sockets::MULTICAST_INTERFACE => if socket.v6 { s.set_multicast_if_v6(value as u32) } else { tuning::set_interface_v4(s, value as u32, &socket.multicast_interface) },
+            sockets::PACKET_INFORMATION => tuning::set_reports_packets(s, socket.v6, on), sockets::DONT_FRAGMENT => tuning::set_dont_fragment(s, on),
+            sockets::RECEIVE_ERRORS => tuning::set_receives_errors(s, socket.v6, socket.raw, on),
             _ => return Err(Error::InvalidArgument),
         }.map_err(error)
     }

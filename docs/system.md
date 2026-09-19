@@ -1,7 +1,7 @@
 # System facts, notifications, child processes, the terminal, accounts and priorities
 
-Four capability groups follow `faults` in `dotnet_pal_api`, and `accounts` and `priority`
-close the table. The boundary's System.Native
+Four capability groups follow `faults` in `dotnet_pal_api`, and `accounts`, `priority` and
+`spawn_as` stand near the end of the table. The boundary's System.Native
 builds on them the environment as an enumeration and the facts behind `Environment` and
 `RuntimeInformation`, POSIX signal registrations and `Console.CancelKeyPress`,
 `System.Diagnostics.Process`, and the interactive console. A port implements each group as
@@ -15,6 +15,7 @@ one Rust trait, or leaves it absent.
 | `terminal` | `DOTNET_PAL_CAP_TERMINAL` | `port::Terminal` | `window_size`, `set_input_mode`, `input_ready`, `control_character` |
 | `accounts` | `DOTNET_PAL_CAP_ACCOUNTS` | `port::Accounts` | `user_by_id`, `user_by_name`, `process_groups`, `user_groups` |
 | `priority` | `DOTNET_PAL_CAP_PRIORITY` | `port::Priority` | `get`, `set` |
+| `spawn_as` | `DOTNET_PAL_CAP_SPAWN_AS` | `port::SpawnAs` | `spawn_as` |
 
 ## System facts
 
@@ -139,8 +140,21 @@ System.Native builds `GetPwUidR`, `GetPwNamR`, `GetGroupList` and `GetGroups` on
 group. The BCL uses them to start a child under a user name, to decide whether this
 process may execute a file, and to name the user at the other end of a named pipe.
 Without the group the two lookups still know the one user the process runs as, from the
-`system` group. Starting a child as another user is not carried: `spawn` has no
-credentials.
+`system` group.
+
+## A child under another identity
+
+`spawn_as` is the request of `processes.spawn` with the identity the child runs under: its
+user, its primary group and its supplementary groups. The result is a child of the
+`processes` group in every respect. The child takes its groups, its group and its user in
+that order and enters its working directory as the new user, as the reference
+implementation does. Taking another identity is a privilege (`ACCESS_DENIED` without it);
+a process without it may still name its own user and group with groups it holds itself.
+The Linux provider forks for this start, where `spawn` uses `posix_spawn`: a child that
+shares the parent's memory while it changes its user clears the parent's dumpable flag,
+which a forked child does not. `Process.Start` with `ProcessStartInfo.UserName` rests on
+the group, together with the account and group list lookups. Handles of other code that
+were not made close-on-exec reach such a child as they reach any other.
 
 ## Priorities
 
@@ -160,19 +174,19 @@ A port without `Modules` loads nothing.
 
 ## Providers
 
-| Provider | `SystemInfo` | `Notifications` | `Processes` | `Terminal` | `Accounts` and `Priority` |
+| Provider | `SystemInfo` | `Notifications` | `Processes` | `Terminal` | `Accounts`, `Priority` and `SpawnAs` |
 | --- | --- | --- | --- | --- | --- |
-| Linux backend (`linux` feature) | `src/linux_system.rs` | `src/linux_notifications.rs`: signals through a self-pipe to a dispatcher thread | `src/linux_processes.rs`: `posix_spawn`, waits through a pidfd, or by polling where the kernel has none | `src/linux_terminal.rs`: termios | `src/linux_accounts.rs`: `getpwuid_r`, `getpwnam_r`, `getgroups`, `getgrouplist`; `src/linux_priority.rs`: `getpriority`, `setpriority` per thread |
-| Desktop `std` port | `std::env`, `libc` for the rest | the same design with `std::thread` | `std::process::Command` | termios through `libc` | the same calls through `libc` on Unix; accounts absent on Windows, priority classes there |
-| C host tables | `host-system` | `host-notifications` | `host-processes` | `host-terminal` | `host-accounts` (every callback may be NULL), `host-priority` |
+| Linux backend (`linux` feature) | `src/linux_system.rs` | `src/linux_notifications.rs`: signals through a self-pipe to a dispatcher thread | `src/linux_processes.rs`: `posix_spawn`, waits through a pidfd, or by polling where the kernel has none | `src/linux_terminal.rs`: termios | `src/linux_accounts.rs`: `getpwuid_r`, `getpwnam_r`, `getgroups`, `getgrouplist`; `src/linux_priority.rs`: `getpriority`, `setpriority` per thread; `spawn_as` in `src/linux_processes.rs`: `fork`, then `setgroups`, `setgid`, `setuid`, `execve` |
+| Desktop `std` port | `std::env`, `libc` for the rest | the same design with `std::thread` | `std::process::Command` | termios through `libc` | the same calls through `libc` on Unix, `spawn_as` through a `pre_exec` step of `std::process::Command`; accounts and `spawn_as` absent on Windows, priority classes there |
+| C host tables | `host-system` | `host-notifications` | `host-processes` | `host-terminal` | `host-accounts` (every callback may be NULL), `host-priority`, `host-spawn-as` |
 | Bare-metal example | machine name, uptime, image path | absent | absent | absent | absent |
 
 The Linux processes provider sets the child's working directory with
 `posix_spawn_file_actions_addchdir_np`, which needs glibc 2.29 or musl 1.1.24 at link
 time.
 
-`scripts/system.sh`, `notifications.sh`, `processes.sh`, `terminal.sh`, `accounts.sh` and
-`priority.sh` run the
+`scripts/system.sh`, `notifications.sh`, `processes.sh`, `terminal.sh`, `accounts.sh`,
+`priority.sh` and `spawn-as.sh` run the
 conformance tests of the Linux providers and of independent C providers behind host
 tables: real signals sent to the process, real children with pipes, and a
 pseudo-terminal the test creates for itself. `samples/TerminalProbe` is `System.Console`

@@ -77,7 +77,17 @@ when off and seconds plus one when on, `ERROR` reads and clears the pending erro
 status code, `AVAILABLE` is the number of bytes that can be received without waiting,
 `KEEP_ALIVE_IDLE` and `KEEP_ALIVE_INTERVAL` are seconds, `KEEP_ALIVE_COUNT` is a number
 of probes, `HOPS` and `MULTICAST_HOPS` are hop limits, `MULTICAST_INTERFACE` is an
-interface index. An option the socket's protocol does not have is `UNSUPPORTED`.
+interface index. `PACKET_INFORMATION` makes the `packets` group report where a datagram
+arrived, `DONT_FRAGMENT` forbids the fragmentation of what an IPv4 socket sends, and
+`RECEIVE_ERRORS` turns what the network reports about an earlier send (an unreachable
+host, an expired hop limit) into the status of a later receive. An option the socket's
+protocol does not have is `UNSUPPORTED`.
+
+A third kind of socket beside streams and datagrams is `RAW`: a raw socket of the
+family's ICMP protocol, which is what `Ping` opens. What it receives over IPv4 starts with
+the IP header, over IPv6 with the ICMPv6 header. It has no ports, so the port of an
+address it is given is ignored. Opening one is a privilege on most targets
+(`ACCESS_DENIED` without it).
 
 `poll` is level-triggered and takes an optional wake channel. `wake(channel)` makes
 the poll in progress on that channel return early, or the next one when none is in
@@ -97,9 +107,13 @@ holds it in a poll is released after that poll returns, which the close triggers
 through the same wake.
 
 Multicast membership, reverse lookup and the list of network interfaces belong to the
-`network` group ([facilities](facilities.md)). Unix domain and raw sockets, out-of-band
-data, control messages and packet information are not carried; System.Native answers
-`EAFNOSUPPORT` or `ENOTSUP`.
+`network` group, Unix domain sockets to `local_sockets`, and the destination and arrival
+interface of a datagram to `packets` ([facilities](facilities.md)). Raw sockets of
+protocols other than ICMP, out-of-band data and control messages other than packet
+information are not carried; System.Native answers `EPROTONOSUPPORT` or `ENOTSUP`. Raw
+option numbers are the numbers of one operating system, so `SetRawSocketOption` is
+`ENOTSUP`, except for the one pair the BCL's own `Ping` sets on Linux (`IP_RECVERR`,
+`IPV6_RECVERR`), which System.Native maps onto `RECEIVE_ERRORS`.
 
 A program that touches the `Socket` type makes the BCL create its event ports before
 it asks for any socket. System.Native therefore creates ports on a boundary without

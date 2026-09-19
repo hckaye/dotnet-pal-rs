@@ -319,6 +319,35 @@ static unsafe class Program
 #endif
     }
 
+    // ---- a child under another identity ----------------------------------------------------------------------
+    private static void SpawnAs()
+    {
+        string[]? other = File.Exists("/etc/passwd")
+            ? File.ReadAllLines("/etc/passwd").Select(l => l.Split(':')).FirstOrDefault(f => f.Length >= 7 && f[0] != Environment.UserName && f[2] != "0" && f[0].Length > 0) : null;
+#if EXPECT_SPAWN_AS
+        Check(other != null, "/etc/passwd names no unprivileged account");
+        if (other == null) return;
+        var start = new ProcessStartInfo("/usr/bin/id", "-u") { UserName = other[0], RedirectStandardOutput = true, UseShellExecute = false };
+        if (Environment.UserName == "root")
+        {
+            using Process child = Process.Start(start)!;
+            string said = child.StandardOutput.ReadToEnd().Trim();
+            child.WaitForExit();
+            Check(child.ExitCode == 0 && said == other[2], "a child started as '" + other[0] + "' says it is user " + said);
+            Console.WriteLine("a child ran as " + other[0] + " (" + said + ")");
+        }
+        else
+        {
+            // Taking another identity is a privilege.
+            Check(Throws<Win32Exception>(() => Process.Start(start)), "a child under another identity without the privilege");
+            Console.WriteLine("a child under another identity is refused without the privilege");
+        }
+#else
+        if (other != null) Check(Throws<Win32Exception>(() => Process.Start(new ProcessStartInfo("/usr/bin/id", "-u") { UserName = other[0], UseShellExecute = false })), "a child under another identity without the group");
+        Console.WriteLine("children under another identity absent, as expected");
+#endif
+    }
+
     static int Main()
     {
         Console.WriteLine("SYSTEM PROBE start");
@@ -329,6 +358,7 @@ static unsafe class Program
         Modules();
         Accounts();
         Priority();
+        SpawnAs();
         Console.WriteLine(s_failures == 0 ? "SYSTEM PROBE PASS" : "SYSTEM PROBE FAIL count=" + s_failures);
         return s_failures == 0 ? 0 : 1;
     }

@@ -70,6 +70,14 @@ static inline const dotnet_pal_priority_ops *sn_priority(void) {
     const dotnet_pal_api *a = sn_api();
     return sn_has(a, DOTNET_PAL_PRIORITY_API_SIZE, DOTNET_PAL_CAP_PRIORITY) ? &a->priority : NULL;
 }
+static inline const dotnet_pal_packets_ops *sn_packets(void) {
+    const dotnet_pal_api *a = sn_api();
+    return sn_has(a, DOTNET_PAL_PACKETS_API_SIZE, DOTNET_PAL_CAP_PACKETS) ? &a->packets : NULL;
+}
+static inline const dotnet_pal_spawn_as_ops *sn_spawn_as(void) {
+    const dotnet_pal_api *a = sn_api();
+    return sn_has(a, DOTNET_PAL_SPAWN_AS_API_SIZE, DOTNET_PAL_CAP_SPAWN_AS) ? &a->spawn_as : NULL;
+}
 static inline const dotnet_pal_streams_ops *sn_streams(void) {
     const dotnet_pal_api *a = sn_api();
     if (!sn_has(a, DOTNET_PAL_STREAMS_API_SIZE, DOTNET_PAL_CAP_STREAMS) || !a->streams.write || !a->streams.read || !a->streams.is_terminal) return NULL;

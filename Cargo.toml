@@ -45,6 +45,8 @@ host-network = ["host"]
 host-local-sockets = ["host"]
 host-accounts = ["host"]
 host-priority = ["host"]
+host-packets = ["host"]
+host-spawn-as = ["host"]
 # OS-independent storage providers usable by any port.
 storage-arena = []
 storage-hooks = []

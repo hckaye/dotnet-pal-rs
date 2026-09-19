@@ -80,19 +80,23 @@ PALEXPORT int32_t SystemNative_ForkAndExecProcess(const char* filename, char* co
     int32_t redirectStdin, int32_t redirectStdout, int32_t redirectStderr, int32_t setCredentials, uint32_t userId, uint32_t groupId,
     uint32_t* groups, int32_t groupsLength, int32_t* childPid, int32_t* stdinFd, int32_t* stdoutFd, int32_t* stderrFd) {
     const dotnet_pal_processes_ops *p = sn_processes(); const dotnet_pal_kernel_ops *k = threads();
-    (void)userId; (void)groupId; (void)groups; (void)groupsLength;
-    if (!childPid || !stdinFd || !stdoutFd || !stderrFd || !filename || !argv) return sn_fail(EINVAL);
+    const dotnet_pal_spawn_as_ops *as = sn_spawn_as();
+    if (!childPid || !stdinFd || !stdoutFd || !stderrFd || !filename || !argv || groupsLength < 0 || (groupsLength > 0 && !groups)) return sn_fail(EINVAL);
     *childPid = -1; *stdinFd = -1; *stdoutFd = -1; *stderrFd = -1;
     if (!p || !k) return sn_fail(ENOTSUP);
-    if (setCredentials) return sn_fail(ENOTSUP);
+    if (setCredentials && !as) return sn_fail(ENOTSUP); /* a child under another identity is a group of its own */
     size_t arguments = count_texts(argv);
     if (arguments == 0 || !*filename) return sn_fail(EINVAL);
     child *c = SystemNative_Calloc(1, sizeof *c);
     if (!c) return -1;
     uint32_t pipes = (redirectStdin ? DOTNET_PAL_PIPE_INPUT : 0) | (redirectStdout ? DOTNET_PAL_PIPE_OUTPUT : 0) | (redirectStderr ? DOTNET_PAL_PIPE_ERROR : 0);
     dotnet_pal_spawned spawned;
-    uint32_t status = p->spawn((const uint8_t*)filename, strlen(filename), (const uint8_t *const*)argv, arguments,
-        (const uint8_t *const*)envp, envp ? count_texts(envp) : 0, (const uint8_t*)cwd, cwd ? strlen(cwd) : 0, pipes, &spawned, sizeof spawned);
+    dotnet_pal_identity identity = {userId, groupId, groupsLength > 0 ? groups : NULL, (size_t)groupsLength};
+    uint32_t status = setCredentials
+        ? as->spawn_as((const uint8_t*)filename, strlen(filename), (const uint8_t *const*)argv, arguments, (const uint8_t *const*)envp, envp ? count_texts(envp) : 0,
+              (const uint8_t*)cwd, cwd ? strlen(cwd) : 0, pipes, &identity, &spawned, sizeof spawned)
+        : p->spawn((const uint8_t*)filename, strlen(filename), (const uint8_t *const*)argv, arguments,
+              (const uint8_t *const*)envp, envp ? count_texts(envp) : 0, (const uint8_t*)cwd, cwd ? strlen(cwd) : 0, pipes, &spawned, sizeof spawned);
     if (status != DOTNET_PAL_OK) { SystemNative_Free(c); return sn_fail(sn_errno(status)); }
     intptr_t in = spawned.input ? pipe_descriptor(spawned.input, PAL_O_WRONLY) : -1;
     intptr_t out = spawned.output ? pipe_descriptor(spawned.output, PAL_O_RDONLY) : -1;

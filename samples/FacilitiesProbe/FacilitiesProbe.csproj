@@ -17,12 +17,13 @@
     <InvariantTimezone>true</InvariantTimezone>
     <UseSystemResourceKeys>true</UseSystemResourceKeys>
     <IlcOptimizationPreference>Size</IlcOptimizationPreference>
-    <ProbeExpect Condition="'$(ProbeExpect)' == ''">watches;mappings;volumes;network;local</ProbeExpect>
+    <ProbeExpect Condition="'$(ProbeExpect)' == ''">watches;mappings;volumes;network;local;packets</ProbeExpect>
     <DefineConstants Condition="$(ProbeExpect.Contains('watches'))">$(DefineConstants);EXPECT_WATCHES</DefineConstants>
     <DefineConstants Condition="$(ProbeExpect.Contains('mappings'))">$(DefineConstants);EXPECT_MAPPINGS</DefineConstants>
     <DefineConstants Condition="$(ProbeExpect.Contains('volumes'))">$(DefineConstants);EXPECT_VOLUMES</DefineConstants>
     <DefineConstants Condition="$(ProbeExpect.Contains('network'))">$(DefineConstants);EXPECT_NETWORK</DefineConstants>
     <DefineConstants Condition="$(ProbeExpect.Contains('local'))">$(DefineConstants);EXPECT_LOCAL</DefineConstants>
+    <DefineConstants Condition="$(ProbeExpect.Contains('packets'))">$(DefineConstants);EXPECT_PACKETS</DefineConstants>
     <DefineConstants Condition="$(ProbeExpect.Contains('noentropy'))">$(DefineConstants);EXPECT_NO_ENTROPY</DefineConstants>
     <PalRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))</PalRoot>
     <PalLib Condition="'$(PalLib)' == ''">$(PalRoot)/target/release/libdotnet_pal_rs.a</PalLib>

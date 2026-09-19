@@ -146,6 +146,12 @@ impl Port for Standalone {
     #[cfg(feature = "linux")] type Priority = Linux;
     #[cfg(feature = "host-priority")] type Priority = Host;
     #[cfg(not(any(feature = "linux", feature = "host-priority")))] type Priority = Absent;
+    #[cfg(feature = "linux")] type Packets = Linux;
+    #[cfg(feature = "host-packets")] type Packets = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-packets")))] type Packets = Absent;
+    #[cfg(feature = "linux")] type SpawnAs = Linux;
+    #[cfg(feature = "host-spawn-as")] type SpawnAs = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-spawn-as")))] type SpawnAs = Absent;
 
     #[cfg(feature = "linux")] type Abort = Linux;
     #[cfg(all(feature = "host", not(feature = "linux")))] type Abort = Host;

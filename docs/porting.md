@@ -85,6 +85,8 @@ The capability keys and the traits behind them:
 | `LocalSockets` | `LocalSockets` | Unix domain sockets by path and the user at their other end; provided by the type that provides `Sockets` |
 | `Accounts` | `Accounts` | Users by id and by name, group lists |
 | `Priority` | `Priority` | Scheduling priority of a process |
+| `Packets` | `Packets` | The interface and destination address of a received datagram; provided by the type that provides `Sockets` |
+| `SpawnAs` | `SpawnAs` | A child started as another user; provided by the type that provides `Processes` |
 | `Context` | `SignalContext` | Architecture-bound signal substrate (raw table); optional, see below |
 | `Wasi` | `WasiTransport` | The single-import WASIp1 transport |
 | `Abort` | `Abort` | Termination after an internal invariant failure |
@@ -105,7 +107,7 @@ signal handlers. A port that owns a trap path provides `Faults` instead: its
 handler builds a `faults::Frame` and calls `faults::deliver`, and the runtime
 turns a null dereference in managed code into `NullReferenceException` (on ARM64;
 elsewhere, and without either capability, a hardware fault ends the run). The
-bare-metal example is such a port. `Streams`, `Files`, `Sockets` and the eleven
+bare-metal example is such a port. `Streams`, `Files`, `Sockets` and the thirteen
 groups after `Faults` are what the boundary's System.Native builds the BCL's
 console, file, network, process and environment APIs on; a program that uses none
 of them needs none of them. See [io](io.md), [system](system.md) and

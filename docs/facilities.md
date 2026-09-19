@@ -1,6 +1,6 @@
-# Change watching, file mappings, volumes, network information and local sockets
+# Change watching, file mappings, volumes, network information, local sockets and packet information
 
-Five capability groups follow `terminal` in `dotnet_pal_api`. The boundary's
+Six capability groups follow `terminal` in `dotnet_pal_api`. The boundary's
 System.Native builds `FileSystemWatcher`, `MemoryMappedFile`, `DriveInfo`,
 `NetworkInterface`, reverse name lookup, multicast membership, Unix domain sockets and
 named pipes on them. A port implements each group as one Rust trait, or leaves it absent.
@@ -12,11 +12,12 @@ named pipes on them. A port implements each group as one Rust trait, or leaves i
 | `volumes` | `DOTNET_PAL_CAP_VOLUMES` | `port::Volumes` | `entry`, `status` |
 | `network` | `DOTNET_PAL_CAP_NETWORK` | `port::Network` | `interface_entry`, `address_entry`, `reverse_lookup`, `membership` |
 | `local_sockets` | `DOTNET_PAL_CAP_LOCAL_SOCKETS` | `port::LocalSockets` | `bind`, `connect`, `address`, `peer_user` |
+| `packets` | `DOTNET_PAL_CAP_PACKETS` | `port::Packets` | `receive` |
 
-`mappings` takes the file handles of the `files` group, and `network` and
-`local_sockets` take the socket handles of the `sockets` group, so the type that provides
+`mappings` takes the file handles of the `files` group, and `network`, `local_sockets`
+and `packets` take the socket handles of the `sockets` group, so the type that provides
 `Files` also provides `Mappings`, and the type that provides `Sockets` also provides
-`Network` and `LocalSockets`.
+`Network`, `LocalSockets` and `Packets`.
 
 ## Change watching
 
@@ -135,14 +136,29 @@ temporary directory; `PipeOptions.CurrentUserOnly` and `GetImpersonationUserName
 `peer_user`, and the name of that user comes from the `accounts` group
 ([system](system.md)).
 
+## Packet information
+
+`packets.receive` is the receive of the `sockets` group for a datagram or a raw socket,
+and it also reports where the datagram arrived: the index of the interface and the
+address it was sent to. A socket bound to the wildcard address learns from it which of
+its addresses a peer used. The option `PACKET_INFORMATION` has to be on before the
+datagram arrives. An IPv4 datagram on an IPv6 socket that carries both families has an
+IPv4-mapped destination, as its sender has, and a link-local destination has the arrival
+interface as its scope.
+
+`Socket.ReceiveMessageFrom` and `IPPacketInformation` rest on it. The control buffer the
+BCL passes to `ReceiveMessage` and hands back to `TryGetIPPacketInformation` is
+System.Native's own on both sides, so it holds one `dotnet_pal_packet_info` and no
+platform control messages.
+
 ## Providers
 
-| Provider | `Watches` | `Mappings` | `Volumes` | `Network` and `LocalSockets` |
+| Provider | `Watches` | `Mappings` | `Volumes` | `Network`, `LocalSockets` and `Packets` |
 | --- | --- | --- | --- | --- |
-| Linux backend (`linux` feature) | `src/linux_watches.rs`: inotify | `src/linux_mappings.rs`: `mmap`, `msync`, `munmap` | `src/linux_volumes.rs`: `/proc/self/mounts` and `statvfs` | `src/linux_network.rs`: `getifaddrs`, `getnameinfo`, the membership socket options; `src/linux_local_sockets.rs`: `AF_UNIX` with `SO_PEERCRED` |
-| Desktop `std` port | inotify on Linux; elsewhere a thread that compares directory snapshots | `mmap` on Unix; absent on Windows | as the Linux backend on Linux, `getfsstat` on macOS; absent on Windows | `getifaddrs` on Unix, `socket2` Unix sockets with `SO_PEERCRED` or `getpeereid`; both absent on Windows |
+| Linux backend (`linux` feature) | `src/linux_watches.rs`: inotify | `src/linux_mappings.rs`: `mmap`, `msync`, `munmap` | `src/linux_volumes.rs`: `/proc/self/mounts` and `statvfs` | `src/linux_network.rs`: `getifaddrs`, `getnameinfo`, the membership socket options; `src/linux_local_sockets.rs`: `AF_UNIX` with `SO_PEERCRED`; `src/linux_packets.rs`: `recvmsg` with `IP_PKTINFO` or `IPV6_PKTINFO` |
+| Desktop `std` port | inotify on Linux; elsewhere a thread that compares directory snapshots | `mmap` on Unix; absent on Windows | as the Linux backend on Linux, `getfsstat` on macOS; absent on Windows | `getifaddrs` on Unix, `socket2` Unix sockets with `SO_PEERCRED` or `getpeereid`, `recvmsg` with packet information; all three absent on Windows |
 | `dotnet-pal-memfs` | exact events from its own operations; a read waits through the `set_wait` hook | shared mappings point into the file's own pages; private ones are copies | one volume at `/` with the capacity of the file system | |
-| C host tables | `host-watches` | `host-mappings` | `host-volumes` | `host-network` (every callback may be NULL), `host-local-sockets` |
+| C host tables | `host-watches` | `host-mappings` | `host-volumes` | `host-network` (every callback may be NULL), `host-local-sockets`, `host-packets` |
 | Bare-metal example | through `dotnet-pal-memfs` | through `dotnet-pal-memfs` | through `dotnet-pal-memfs` | absent |
 
 The Linux watch provider is one inotify instance per watcher, with the kernel's watch
@@ -193,7 +209,9 @@ views of an anonymous map), reads `DriveInfo`, lists `NetworkInterface`s, looks 
 name of the loopback address, tunes keep-alive and the hop limit of a socket, sends a
 datagram to a multicast group it joined and then left, reads gateways, interface
 statistics and the UDP listeners (which the BCL takes from `/proc` and `/sys` through the
-`files` group), and talks through a Unix domain socket and a named pipe. `scripts/facilities-probe.sh`
+`files` group), talks through a Unix domain socket and a named pipe, asks
+`ReceiveMessageFrom` where a datagram arrived, and pings the loopback address through a
+raw ICMP socket. `scripts/facilities-probe.sh`
 publishes it against the source-built runtime and the boundary's System.Native, runs it
 on Linux, checks from the link map that every `SystemNative_*` symbol came from the
 boundary, and applies the isolation gate. `PROBE_EXPECT` names the groups the probe

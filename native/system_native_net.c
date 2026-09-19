@@ -150,11 +150,13 @@ PALEXPORT int32_t SystemNative_Socket(int32_t addressFamily, int32_t socketType,
     uint32_t family = addressFamily == AddressFamily_AF_INET ? DOTNET_PAL_FAMILY_IPV4 : addressFamily == AddressFamily_AF_INET6 ? DOTNET_PAL_FAMILY_IPV6
         : addressFamily == AddressFamily_AF_UNIX && sn_local_sockets() ? DOTNET_PAL_FAMILY_LOCAL : 0;
     if (!s || family == 0) return Error_EAFNOSUPPORT; /* without the group no address family exists */
-    uint32_t kind = socketType == SocketType_SOCK_STREAM ? DOTNET_PAL_SOCKET_STREAM : socketType == SocketType_SOCK_DGRAM ? DOTNET_PAL_SOCKET_DATAGRAM : 0;
+    uint32_t kind = socketType == SocketType_SOCK_STREAM ? DOTNET_PAL_SOCKET_STREAM : socketType == SocketType_SOCK_DGRAM ? DOTNET_PAL_SOCKET_DATAGRAM
+        : socketType == SocketType_SOCK_RAW ? DOTNET_PAL_SOCKET_RAW : 0;
     if (kind == 0) return Error_EPROTOTYPE;
-    /* A local socket has no protocol to name. */
-    int32_t natural = family == DOTNET_PAL_FAMILY_LOCAL ? ProtocolType_PT_UNSPECIFIED : kind == DOTNET_PAL_SOCKET_STREAM ? ProtocolType_PT_TCP : ProtocolType_PT_UDP;
-    if (protocolType != ProtocolType_PT_UNSPECIFIED && protocolType != natural) return Error_EPROTONOSUPPORT;
+    /* A local socket has no protocol to name; a raw socket is the ICMP of its family, which is what Ping opens. */
+    int32_t natural = family == DOTNET_PAL_FAMILY_LOCAL ? ProtocolType_PT_UNSPECIFIED : kind == DOTNET_PAL_SOCKET_STREAM ? ProtocolType_PT_TCP
+        : kind == DOTNET_PAL_SOCKET_DATAGRAM ? ProtocolType_PT_UDP : family == DOTNET_PAL_FAMILY_IPV4 ? ProtocolType_PT_ICMP : ProtocolType_PT_ICMPV6;
+    if (kind == DOTNET_PAL_SOCKET_RAW ? protocolType != natural : protocolType != ProtocolType_PT_UNSPECIFIED && protocolType != natural) return Error_EPROTONOSUPPORT;
     uint32_t status = s->create(family, kind, &handle);
     if (status != DOTNET_PAL_OK) return status == DOTNET_PAL_UNSUPPORTED ? Error_EAFNOSUPPORT : net_error(status);
     intptr_t fd = adopt(handle, addressFamily, socketType, natural);
@@ -340,7 +342,7 @@ PALEXPORT int32_t SystemNative_SendMessage(intptr_t socket, MessageHeader* messa
     if (messageHeader->IOVectorCount == 1 || total == 0) {
         const uint8_t *only = messageHeader->IOVectorCount > 0 ? messageHeader->IOVectors[0].Base : NULL;
         status = s->send(object->handle, only, total, addressed ? &to : NULL, &done);
-    } else if (object->type == SocketType_SOCK_DGRAM) {
+    } else if (object->type != SocketType_SOCK_STREAM) { /* a datagram or a raw socket sends one message, whole */
         uint8_t *gathered = SystemNative_Malloc(total);
         if (!gathered) status = DOTNET_PAL_OUT_OF_MEMORY;
         else {
@@ -369,7 +371,12 @@ PALEXPORT int32_t SystemNative_SendMessage(intptr_t socket, MessageHeader* messa
  * whole and scattered, since a second receive would be the next datagram. No control data exists. */
 PALEXPORT int32_t SystemNative_ReceiveMessage(intptr_t socket, MessageHeader* messageHeader, int32_t flags, int64_t* received) {
     const dotnet_pal_sockets_ops *s; int32_t error; uint32_t wanted; size_t total, got = 0; dotnet_pal_socket_address from;
+    const dotnet_pal_packets_ops *k = sn_packets(); dotnet_pal_packet_info info;
     if (!messageHeader || !received || messageHeader->SocketAddressLen < 0 || messageHeader->ControlBufferLen < 0) return Error_EFAULT;
+    /* A caller that brought a control buffer wants to know where the datagram arrived. The buffer's format is this
+     * unit's own, since TryGetIPPacketInformation is the only reader: one dotnet_pal_packet_info. */
+    bool informed = k && messageHeader->ControlBuffer && messageHeader->ControlBufferLen >= (int32_t)sizeof info;
+    memset(&info, 0, sizeof info);
     *received = 0;
     if (!receive_flags(flags, &wanted)) return Error_ENOTSUP;
     if (!total_length(messageHeader, &total)) return Error_EFAULT;
@@ -379,14 +386,16 @@ PALEXPORT int32_t SystemNative_ReceiveMessage(intptr_t socket, MessageHeader* me
     while (first < messageHeader->IOVectorCount && messageHeader->IOVectors[first].Count == 0) first++;
     uint32_t status;
     memset(&from, 0, sizeof from);
-    if (first >= messageHeader->IOVectorCount) status = s->receive(object->handle, NULL, 0, wanted, &from, &got);
-    else if (object->type != SocketType_SOCK_DGRAM || first == messageHeader->IOVectorCount - 1)
-        status = s->receive(object->handle, messageHeader->IOVectors[first].Base, messageHeader->IOVectors[first].Count, wanted, &from, &got);
+#define RECEIVE(data, capacity) (informed && object->type != SocketType_SOCK_STREAM ? k->receive(object->handle, data, capacity, wanted, &from, &info, sizeof info, &got) \
+                                                                                   : s->receive(object->handle, data, capacity, wanted, &from, &got))
+    if (first >= messageHeader->IOVectorCount) status = RECEIVE(NULL, 0);
+    else if (object->type == SocketType_SOCK_STREAM || first == messageHeader->IOVectorCount - 1)
+        status = RECEIVE(messageHeader->IOVectors[first].Base, messageHeader->IOVectors[first].Count);
     else {
         uint8_t *whole = SystemNative_Malloc(total);
         if (!whole) status = DOTNET_PAL_OUT_OF_MEMORY;
         else {
-            status = s->receive(object->handle, whole, total, wanted, &from, &got);
+            status = RECEIVE(whole, total);
             size_t at = 0;
             for (int32_t i = first; status == DOTNET_PAL_OK && i < messageHeader->IOVectorCount && at < got; ++i) {
                 size_t part = messageHeader->IOVectors[i].Count < got - at ? messageHeader->IOVectors[i].Count : got - at;
@@ -400,7 +409,9 @@ PALEXPORT int32_t SystemNative_ReceiveMessage(intptr_t socket, MessageHeader* me
         *received = (int64_t)got;
         if (messageHeader->SocketAddress) store_address(messageHeader->SocketAddress, &messageHeader->SocketAddressLen, &from);
         messageHeader->ControlBufferLen = 0; messageHeader->Flags = 0;
+        if (informed && info.destination.family != 0) { memcpy(messageHeader->ControlBuffer, &info, sizeof info); messageHeader->ControlBufferLen = (int32_t)sizeof info; }
     }
+#undef RECEIVE
     sn_unpin(object);
     return error;
 }
@@ -453,6 +464,8 @@ static uint32_t option_of(int32_t level, int32_t name, bool *inverted) {
         case SocketOptionName_SO_IP_TTL: case SocketOptionName_SO_IPV6_HOPLIMIT: return DOTNET_PAL_SOCKET_HOPS;
         case SocketOptionName_SO_IP_MULTICAST_TTL: return DOTNET_PAL_SOCKET_MULTICAST_HOPS;
         case SocketOptionName_SO_IP_MULTICAST_LOOP: *inverted = false; return DOTNET_PAL_SOCKET_MULTICAST_LOOPBACK;
+        case SocketOptionName_SO_IP_PKTINFO: return DOTNET_PAL_SOCKET_PACKET_INFORMATION;
+        case SocketOptionName_SO_IP_DONTFRAGMENT: return level == SocketOptionLevel_SOL_IP ? DOTNET_PAL_SOCKET_DONT_FRAGMENT : 0;
         case SocketOptionName_SO_IP_MULTICAST_IF: return level == SocketOptionLevel_SOL_IPV6 ? DOTNET_PAL_SOCKET_MULTICAST_INTERFACE : 0; /* IPv4 names it by address; see SetIPv4MulticastOption */
         case SocketOptionName_SO_IPV6_V6ONLY: return level == SocketOptionLevel_SOL_IPV6 ? DOTNET_PAL_SOCKET_IPV6_ONLY : 0;
         default: return 0;
@@ -461,7 +474,8 @@ static uint32_t option_of(int32_t level, int32_t name, bool *inverted) {
 }
 static bool is_flag(uint32_t option) {
     return option == DOTNET_PAL_SOCKET_REUSE_ADDRESS || option == DOTNET_PAL_SOCKET_NO_DELAY || option == DOTNET_PAL_SOCKET_KEEP_ALIVE
-        || option == DOTNET_PAL_SOCKET_BROADCAST || option == DOTNET_PAL_SOCKET_IPV6_ONLY || option == DOTNET_PAL_SOCKET_MULTICAST_LOOPBACK;
+        || option == DOTNET_PAL_SOCKET_BROADCAST || option == DOTNET_PAL_SOCKET_IPV6_ONLY || option == DOTNET_PAL_SOCKET_MULTICAST_LOOPBACK
+        || option == DOTNET_PAL_SOCKET_PACKET_INFORMATION || option == DOTNET_PAL_SOCKET_DONT_FRAGMENT;
 }
 PALEXPORT int32_t SystemNative_GetSockOpt(intptr_t socket, int32_t socketOptionLevel, int32_t socketOptionName, uint8_t* optionValue, int32_t* optionLen) {
     const dotnet_pal_sockets_ops *s; int32_t error, result; bool inverted; uint64_t value = 0;
@@ -497,11 +511,26 @@ PALEXPORT int32_t SystemNative_SetSockOpt(intptr_t socket, int32_t socketOptionL
     sn_unpin(object);
     return error;
 }
+/* Raw option numbers are the numbers of one operating system, which the boundary does not pass on. The one pair the BCL
+ * itself uses is known by its Linux numbers: Ping asks for ICMP errors on its socket with IP_RECVERR (0, 11) and
+ * IPV6_RECVERR (41, 25). */
+static int32_t numeric_option(intptr_t socket, uint32_t option, uint64_t *value, bool set);
+static uint32_t raw_option(int32_t level, int32_t name) { return (level == 0 && name == 11) || (level == 41 && name == 25) ? DOTNET_PAL_SOCKET_RECEIVE_ERRORS : 0; }
 PALEXPORT int32_t SystemNative_GetRawSockOpt(intptr_t socket, int32_t socketOptionLevel, int32_t socketOptionName, uint8_t* optionValue, int32_t* optionLen) {
-    (void)socket; (void)socketOptionLevel; (void)socketOptionName; (void)optionValue; (void)optionLen; return Error_ENOTSUP;
+    uint32_t option = raw_option(socketOptionLevel, socketOptionName); uint64_t value = 0;
+    if (!optionValue || !optionLen || *optionLen < (int32_t)sizeof(int32_t)) return Error_EFAULT;
+    if (option == 0) return Error_ENOTSUP;
+    int32_t error = numeric_option(socket, option, &value, false), result = value != 0;
+    if (error != Error_SUCCESS) return error;
+    memcpy(optionValue, &result, sizeof result); *optionLen = (int32_t)sizeof result;
+    return Error_SUCCESS;
 }
 PALEXPORT int32_t SystemNative_SetRawSockOpt(intptr_t socket, int32_t socketOptionLevel, int32_t socketOptionName, uint8_t* optionValue, int32_t optionLen) {
-    (void)socket; (void)socketOptionLevel; (void)socketOptionName; (void)optionValue; (void)optionLen; return Error_ENOTSUP;
+    uint32_t option = raw_option(socketOptionLevel, socketOptionName); int32_t value;
+    if (!optionValue || optionLen < (int32_t)sizeof value) return Error_EFAULT;
+    if (option == 0) return Error_ENOTSUP;
+    memcpy(&value, optionValue, sizeof value);
+    return numeric_option(socket, option, &(uint64_t){value != 0}, true);
 }
 static int32_t numeric_option(intptr_t socket, uint32_t option, uint64_t *value, bool set) {
     const dotnet_pal_sockets_ops *s; int32_t error;
@@ -547,8 +576,22 @@ PALEXPORT int32_t SystemNative_GetBytesAvailable(intptr_t socket, int32_t* avail
     return result;
 }
 PALEXPORT int32_t SystemNative_GetAtOutOfBandMark(intptr_t socket, int32_t* available) { (void)socket; if (available) *available = 0; return Error_ENOTSUP; }
-PALEXPORT int32_t SystemNative_GetControlMessageBufferSize(int32_t isIPv4, int32_t isIPv6) { (void)isIPv4; (void)isIPv6; return 0; }
-PALEXPORT int32_t SystemNative_TryGetIPPacketInformation(MessageHeader* messageHeader, int32_t isIPv4, IPPacketInformation* packetInfo) { (void)messageHeader; (void)isIPv4; (void)packetInfo; return 0; }
+PALEXPORT int32_t SystemNative_GetControlMessageBufferSize(int32_t isIPv4, int32_t isIPv6) {
+    (void)isIPv4; (void)isIPv6;
+    return sn_packets() ? (int32_t)sizeof(dotnet_pal_packet_info) : 0;
+}
+PALEXPORT int32_t SystemNative_TryGetIPPacketInformation(MessageHeader* messageHeader, int32_t isIPv4, IPPacketInformation* packetInfo) {
+    dotnet_pal_packet_info info;
+    if (!messageHeader || !packetInfo || !messageHeader->ControlBuffer || messageHeader->ControlBufferLen < (int32_t)sizeof info) return 0;
+    memcpy(&info, messageHeader->ControlBuffer, sizeof info);
+    bool v4 = info.destination.family == DOTNET_PAL_FAMILY_IPV4;
+    if (info.destination.family == 0 || (isIPv4 != 0) != v4) return 0;
+    memset(packetInfo, 0, sizeof *packetInfo);
+    packetInfo->Address.IsIPv6 = !v4; packetInfo->Address.ScopeId = info.destination.scope;
+    memcpy(packetInfo->Address.Address, info.destination.address, v4 ? 4 : 16);
+    packetInfo->InterfaceIndex = info.interface_index > INT32_MAX ? 0 : (int32_t)info.interface_index;
+    return 1;
+}
 PALEXPORT int32_t SystemNative_PlatformSupportsDualModeIPv4PacketInfo(void) { return 0; }
 
 /* ---- multicast ------------------------------------------------------------------------------------------ */

@@ -316,6 +316,43 @@ static class Program
 #endif
     }
 
+    // ---- where a datagram arrived, and ICMP through a raw socket --------------------------------------------------
+    private static void Packets()
+    {
+#if EXPECT_PACKETS
+        using (var receiver = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
+        {
+            receiver.Bind(new IPEndPoint(IPAddress.Any, 0));
+            receiver.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.PacketInformation, true);
+            int port = ((IPEndPoint)receiver.LocalEndPoint!).Port;
+            using var sender = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            sender.SendTo("where"u8.ToArray(), new IPEndPoint(IPAddress.Loopback, port));
+            receiver.ReceiveTimeout = 3000;
+            byte[] buffer = new byte[64];
+            SocketFlags flags = SocketFlags.None;
+            EndPoint from = new IPEndPoint(IPAddress.Any, 0);
+            int got = receiver.ReceiveMessageFrom(buffer, 0, buffer.Length, ref flags, ref from, out IPPacketInformation where);
+            int loopback = NetworkInterface.GetAllNetworkInterfaces().First(i => i.NetworkInterfaceType == NetworkInterfaceType.Loopback).GetIPProperties().GetIPv4Properties().Index;
+            Check(got == 5 && where.Address.Equals(IPAddress.Loopback) && where.Interface == loopback, "a datagram to 127.0.0.1 arrived at " + where.Address + " through " + where.Interface);
+        }
+        // Ping opens a raw ICMP socket where it may, and sends an echo request it built itself.
+        using (var ping = new Ping())
+        {
+            PingReply reply = ping.Send(IPAddress.Loopback, 3000, new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 }, new PingOptions(32, dontFragment: true));
+            Check(reply.Status == IPStatus.Success && reply.Address.Equals(IPAddress.Loopback) && reply.Buffer.Length == 8, "ping of the loopback address: " + reply.Status);
+        }
+        Console.WriteLine("packet information and ICMP echo pass");
+#else
+        // Without sockets the socket itself is refused; with sockets and without the packets group, the option is.
+        Check(Throws<SocketException>(() =>
+        {
+            using var receiver = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            receiver.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.PacketInformation, true);
+        }), "packet information without the packets group");
+        Console.WriteLine("packet information absent, as expected");
+#endif
+    }
+
     private static int Main()
     {
         Console.WriteLine("FACILITIES PROBE start");
@@ -324,6 +361,7 @@ static class Program
         Volumes();
         Network();
         Local();
+        Packets();
         Console.WriteLine(s_failures == 0 ? "FACILITIES PROBE PASS" : "FACILITIES PROBE FAIL failures=" + s_failures);
         return s_failures == 0 ? 0 : 1;
     }

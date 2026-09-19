@@ -33,6 +33,8 @@
 //! | Unix domain sockets (bind and connect by path, the paths of a socket and its peer, the peer's user) | `socket2` on the sockets provider's handles, SO_PEERCRED on Linux and `getpeereid` on macOS; absent on Windows |
 //! | Accounts (a user by id or by name, the groups of this process and of an account) | `getpwuid_r`, `getpwnam_r`, `getgroups` and `getgrouplist`; absent on Windows |
 //! | Scheduling priority of a process (a niceness from -20 to 19) | `getpriority` and `setpriority`, on Linux for every thread of the process; the six priority classes on Windows |
+//! | Where a datagram arrived (the interface and the address it was sent to, for datagram and raw ICMP sockets) | `recvmsg` with IP_PKTINFO or IPV6_PKTINFO control data on the sockets provider's handles, on Linux and macOS; absent elsewhere |
+//! | A child started as another user (user, primary group and supplementary groups) | `std::process` with a `pre_exec` step that sets the groups, the group and the user and then enters the working directory; needs the privilege to do so, except for the process's own identity; absent on Windows |
 //! | Signal context, WASI transport | absent |
 //!
 //! With the `entry` feature the crate exports `dotnet_pal_get_api` itself, so
@@ -63,6 +65,7 @@ mod network;
 mod local_sockets;
 mod accounts;
 mod priority;
+mod packets;
 #[cfg(all(any(target_os = "linux", target_os = "macos"), any(target_arch = "aarch64", target_arch = "x86_64")))]
 mod faults;
 /// No signal context `faults.rs` can convert: the capability is absent.
@@ -603,7 +606,7 @@ dotnet_pal_rs::declare_port! {
     Topology = Std, Process = Std, Image = system::ImageProvider, Streams = Std, Files = Std,
     Sockets = Std, Faults = faults::Provider, SystemInfo = Std, Notifications = Std, Processes = Std, Terminal = Std,
     Watches = Std, Mappings = Std, Volumes = Std, Network = Std, LocalSockets = Std,
-    Accounts = Std, Priority = Std
+    Accounts = Std, Priority = Std, Packets = Std, SpawnAs = Std
 }
 
 /// Negotiated table for [`StdPort`], usable from Rust without the C symbol.

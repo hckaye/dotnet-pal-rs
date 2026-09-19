@@ -22,7 +22,7 @@ rm "$framework/libSystem.Native.a"
 cp artifacts/system-native/libSystem.Native.a "$framework/libSystem.Native.a"
 cargo rustc --lib --crate-type staticlib --release --features linux
 rm -rf samples/SystemProbe/obj samples/SystemProbe/bin
-dotnet publish samples/SystemProbe/SystemProbe.csproj -c Release -r "$rid" '-p:ProbeExpect=system%3Bprocesses%3Bnotifications%3Blinks%3Bmodules%3Baccounts%3Bpriority' \
+dotnet publish samples/SystemProbe/SystemProbe.csproj -c Release -r "$rid" '-p:ProbeExpect=system%3Bprocesses%3Bnotifications%3Blinks%3Bmodules%3Baccounts%3Bpriority%3Bspawnas' \
   "-p:IlcSdkPath=$overlay/" "-p:IlcFrameworkNativePath=$framework/" \
   "-p:PalLinkMap=$root/artifacts/system-probe/link.map" -o artifacts/system-probe
 SYSTEM_PROBE_VALUE=from-the-boundary timeout 300s artifacts/system-probe/SystemProbe | tee artifacts/system-probe/run.log

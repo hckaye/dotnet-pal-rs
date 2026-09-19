@@ -43,7 +43,7 @@ for backend in linux host-runtime host-support linear linear-heap; do
     suites=(abi services kernel runtime)
     # The Linux providers of the groups behind System.Native run their conformance tests instrumented as well. Each test
     # compares the provider with the kernel, so every provider path is executed.
-    if [[ "$backend" == linux ]]; then suites+=(support topology process image streams files sockets system notifications processes terminal watches mappings volumes network local_sockets accounts priority); fi
+    if [[ "$backend" == linux ]]; then suites+=(support topology process image streams files sockets system notifications processes terminal watches mappings volumes network local_sockets accounts priority packets spawn_as); fi
     for suite in "${suites[@]}"; do
       clang -std=c11 "${common[@]}" "tests/$suite.c" "${providers[@]}" "$lib" \
         -Wl,--gc-sections -Wl,--build-id=sha1 -lpthread -ldl -lm -o "$out/$backend-$suite"

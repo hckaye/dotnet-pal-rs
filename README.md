@@ -223,6 +223,8 @@ bash scripts/network.sh        # interfaces, reverse lookup and multicast member
 bash scripts/local-sockets.sh  # Unix domain sockets by path and the user at the other end
 bash scripts/accounts.sh       # users by id and by name, group lists
 bash scripts/priority.sh       # the priority of this process and of a child, every thread
+bash scripts/packets.sh        # where a datagram arrived, and ICMP echo through a raw socket
+bash scripts/spawn-as.sh       # a child started as another user
 bash scripts/console-probe.sh  # the console probe with the boundary's System.Native
 bash scripts/io-probe.sh       # files, sockets and null references from C# with the boundary's System.Native
 bash scripts/system-probe.sh   # environment, child processes, signal registrations, links and locks from C#

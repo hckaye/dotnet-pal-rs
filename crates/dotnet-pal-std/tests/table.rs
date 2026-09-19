@@ -1338,7 +1338,7 @@ mod sockets_table {
         assert_eq!((get_option(stream, sockets::IPV6_ONLY), set_option(stream, sockets::IPV6_ONLY, 1)), ((UNSUPPORTED, 0), UNSUPPORTED));
         // ERROR and AVAILABLE are read-only, flags are 0 or 1, and no value needs more than 32 bits.
         assert_eq!((set_option(stream, sockets::ERROR, 0), set_option(stream, sockets::AVAILABLE, 0), set_option(stream, sockets::NO_DELAY, 2)), (INVALID_ARGUMENT, INVALID_ARGUMENT, INVALID_ARGUMENT));
-        assert_eq!((set_option(stream, sockets::LINGER, 1 << 32), get_option(stream, 20).0, get_option(stream, 0).0), (INVALID_ARGUMENT, INVALID_ARGUMENT, INVALID_ARGUMENT));
+        assert_eq!((set_option(stream, sockets::LINGER, 1 << 32), get_option(stream, 23).0, get_option(stream, 0).0), (INVALID_ARGUMENT, INVALID_ARGUMENT, INVALID_ARGUMENT));
         assert_eq!((close(stream), close(datagram)), (OK, OK));
     }
 
@@ -1461,7 +1461,7 @@ mod sockets_table {
         assert_eq!((set_option(datagram, sockets::HOPS, 256), set_option(datagram, sockets::MULTICAST_HOPS, 256), set_option(datagram, sockets::MULTICAST_LOOPBACK, 2)),
             (INVALID_ARGUMENT, INVALID_ARGUMENT, INVALID_ARGUMENT));
         assert_eq!((set_option(datagram, sockets::MULTICAST_INTERFACE, 999_999), set_option(datagram, sockets::MULTICAST_INTERFACE, 1 << 32)), (ADDRESS_NOT_AVAILABLE, INVALID_ARGUMENT));
-        assert_eq!((set_option(datagram, 20, 1), get_option(datagram, 20)), (INVALID_ARGUMENT, (INVALID_ARGUMENT, 0)));
+        assert_eq!((set_option(datagram, 23, 1), get_option(datagram, 23)), (INVALID_ARGUMENT, (INVALID_ARGUMENT, 0)));
         assert_eq!((option(datagram, sockets::HOPS), MULTICAST.map(|name| option(datagram, name))), (44, [5, 0, 0]));
         #[cfg(unix)]
         {
@@ -1536,6 +1536,58 @@ mod sockets_table {
         assert_eq!((close(stream), close(datagram)), (OK, OK));
     }
 
+    /// RECEIVE_ERRORS: what ICMP reports about a datagram reaches the socket that sent it. Every OS here tells a connected socket that nobody
+    /// listens where it sent to; one that is not connected learns it only on Linux and only with the option, from its next receive or from the
+    /// ERROR option, once, and is not in error afterwards. macOS has no such option.
+    #[test]
+    fn sockets_receive_what_the_network_reports_when_asked() {
+        let _watchdog = watchdog("sockets_receive_what_the_network_reports_when_asked");
+        const ERRORS: u32 = sockets::RECEIVE_ERRORS;
+        // A stream's failures are its connection's (Linux would take IP_RECVERR on one), and a local socket has no network to complain.
+        #[cfg(unix)]
+        let without = [open(V4, TCP), open(sockets::LOCAL, UDP), open(sockets::LOCAL, TCP)];
+        #[cfg(not(unix))]
+        let without = [open(V4, TCP)];
+        for socket in without { assert_eq!((get_option(socket, ERRORS), set_option(socket, ERRORS, 1), close(socket)), ((UNSUPPORTED, 0), UNSUPPORTED, OK)); }
+        let (mut status, probe) = create(V6, UDP);
+        if status == OK { status = bind(probe, &loopback(V6, 0)); assert_eq!(close(probe), OK); }
+        for (family, mapped) in [(V4, false), (V6, false), (V6, true)] {
+            if family == V6 && status != OK { continue; }
+            // A port that takes datagrams from itself alone: nobody listens there for anyone else, and no other test can be given it meanwhile.
+            let (deaf, at) = bound(if mapped { V4 } else { family }, UDP);
+            assert_eq!(connect(deaf, &at), OK);
+            let nobody = if mapped { Address::v6([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 127, 0, 0, 1], at.port, 0) } else { at };
+            let (sender, mut byte) = (open(family, UDP), [0u8; 1]);
+            if mapped { assert_eq!(set_option(sender, sockets::IPV6_ONLY, 0), OK); }
+            assert_eq!((bind(sender, &Address { family: family as u16, ..Address::default() }), set_blocking(sender, 0), set_option(sender, ERRORS, 2)), (OK, OK, INVALID_ARGUMENT));
+            #[cfg(not(any(target_os = "linux", target_os = "android")))]
+            {
+                assert_eq!((get_option(sender, ERRORS), set_option(sender, ERRORS, 1)), ((UNSUPPORTED, 0), UNSUPPORTED));
+                assert_eq!((send(sender, b"x", Some(&nobody)), bits(sender, READ, 100 * MS), receive(sender, &mut byte, 0)), ((OK, 1), 0, (WOULD_BLOCK, 0, Address::default())));
+            }
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            {
+                let fd = kernel::descriptor(family == V6, false, local(sender).port);
+                let held = || if family == V6 { kernel::option(fd, libc::IPPROTO_IPV6, libc::IPV6_RECVERR) } else { kernel::option(fd, libc::IPPROTO_IP, libc::IP_RECVERR) };
+                assert_eq!((get_option(sender, ERRORS), held()), ((OK, 0), Some(0)));
+                for on in [0, 1, 0] {
+                    // Off, on, off again: without the option the complaint is dropped and nothing ever comes.
+                    assert_eq!((set_option(sender, ERRORS, on), get_option(sender, ERRORS), held(), send(sender, b"x", Some(&nobody))), (OK, (OK, on), Some(on as i32), (OK, 1)));
+                    if on == 0 { assert_eq!((bits(sender, READ, 100 * MS), receive(sender, &mut byte, 0)), (0, (WOULD_BLOCK, 0, Address::default()))); continue; }
+                    assert_eq!((bits(sender, READ, LIMIT * MS), receive(sender, &mut byte, 0)), (ERROR, (CONNECTION_REFUSED, 0, Address::default())));
+                    // Reported once: Linux keeps a copy in a queue the boundary never reads and would poll the socket as in error for it.
+                    assert_eq!((bits(sender, READ, 0), receive(sender, &mut byte, 0), get_option(sender, sockets::ERROR)), (0, (WOULD_BLOCK, 0, Address::default()), (OK, OK as u64)));
+                    assert_eq!((send(sender, b"x", Some(&nobody)), bits(sender, READ, LIMIT * MS)), ((OK, 1), ERROR));
+                    assert_eq!((get_option(sender, sockets::ERROR), get_option(sender, sockets::ERROR), bits(sender, READ, 0)), ((OK, CONNECTION_REFUSED as u64), (OK, OK as u64), 0));
+                }
+                // Connected, which is how Ping uses the option: the same single report.
+                assert_eq!((set_option(sender, ERRORS, 1), connect(sender, &nobody), send(sender, b"x", None), bits(sender, READ, LIMIT * MS)), (OK, OK, (OK, 1), ERROR));
+                assert_eq!((receive(sender, &mut byte, 0), bits(sender, READ, 0), receive(sender, &mut byte, 0)), ((CONNECTION_REFUSED, 0, Address::default()), 0, (WOULD_BLOCK, 0, Address::default())));
+            }
+            assert_eq!((close(sender), close(deaf)), (OK, OK));
+        }
+    }
+
     #[test]
     fn sockets_datagrams_name_their_sender_and_truncate() {
         let _watchdog = watchdog("sockets_datagrams_name_their_sender_and_truncate");
@@ -1562,6 +1614,9 @@ mod sockets_table {
         assert_eq!(send(b, &vec![0u8; 70000], Some(&a_at)), (MESSAGE_TOO_LARGE, 0));
         assert_eq!(set_blocking(b, 0), OK);
         assert_eq!(receive(b, &mut buffer, 0), (WOULD_BLOCK, 0, Address::default()));
+        // No room is no reason to answer without a datagram (macOS would: a receive into nothing returns at once there, with nothing).
+        assert_eq!(receive(b, &mut [], 0), (WOULD_BLOCK, 0, Address::default()));
+        assert_eq!((send(a, b"taken", None), bits(b, READ, LIMIT * MS), receive(b, &mut [], 0), bits(b, READ, 0)), ((OK, 5), READ, (OK, 0, a_at), 0));
         assert_eq!((close(a), close(b)), (OK, OK));
     }
 
@@ -1665,7 +1720,7 @@ mod sockets_table {
         let (code, socket) = create(V4, UDP);
         assert_eq!(code, OK);
         let (at, bad, null) = (loopback(V4, 0), Address { family: 9, ..loopback(V4, 0) }, ptr::null_mut::<c_void>());
-        for (family, kind) in [(0, TCP), (4, TCP), (V4, 0), (V4, 3)] { assert_eq!(create(family, kind), (INVALID_ARGUMENT, ptr::null_mut()), "family {family} kind {kind}"); }
+        for (family, kind) in [(0, TCP), (4, TCP), (V4, 0), (V4, 4), (sockets::LOCAL, sockets::RAW)] { assert_eq!(create(family, kind), (INVALID_ARGUMENT, ptr::null_mut()), "family {family} kind {kind}"); }
         assert_eq!(unsafe { s.create.unwrap()(V4, TCP, ptr::null_mut()) }, INVALID_ARGUMENT);
         assert_eq!((close(null), bind(null, &at), bind(socket, &bad), unsafe { s.bind.unwrap()(socket, ptr::null()) }), (INVALID_ARGUMENT, INVALID_ARGUMENT, INVALID_ARGUMENT, INVALID_ARGUMENT));
         assert_eq!((unsafe { s.listen.unwrap()(null, 1) }, accept(null), connect(null, &at), connect(socket, &bad)),

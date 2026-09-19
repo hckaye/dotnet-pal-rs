@@ -390,6 +390,47 @@ static int ipv6(void) {
     return 1;
 }
 /* The peer is gone: sending ends as a status, never as SIGPIPE. */
+/* RECEIVE_ERRORS: what ICMP reports about a datagram reaches the socket that sent it. The kernel tells a connected socket that nobody listens where it sent to
+ * with or without the option; a socket that is not connected learns it only with the option, from its next receive or from the ERROR option. Either way the
+ * failure is reported once and the socket is not in error afterwards. An IPv6 socket hears about what it sent to an IPv4-mapped address too. */
+static unsigned network_errors(int six) {
+    enum { ERRORS = DOTNET_PAL_SOCKET_RECEIVE_ERRORS };
+    unsigned reported = 0; uint8_t byte; size_t done = 7;
+    for (int pass = 0; pass < (six ? 3 : 1); ++pass) {
+        uint32_t family = pass == 0 ? V4 : V6; int fd, level = pass == 0 ? IPPROTO_IP : IPPROTO_IPV6, name = pass == 0 ? IP_RECVERR : IPV6_RECVERR; dotnet_pal_socket_address nobody;
+        /* A loopback port that was just given up: nobody listens there. */
+        void *gone = bound(pass == 1 ? V6 : V4, UDP, &nobody), *sender = watched(family, UDP, &fd);
+        assert(s->close(gone) == 0);
+        if (pass == 2) {
+            dotnet_pal_socket_address mapped = {V6, nobody.port, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 127, 0, 0, 1}};
+            nobody = mapped;
+            assert(s->set_option(sender, DOTNET_PAL_SOCKET_IPV6_ONLY, 0) == 0);
+        }
+        assert(option(sender, ERRORS) == 0 && own(fd, level, name) == 0 && s->set_blocking(sender, 0) == 0);
+        for (int on = 0; on < 3; ++on) {
+            /* Off, on, off again: without the option the complaint is dropped and nothing ever comes. */
+            assert(s->set_option(sender, ERRORS, on == 1) == 0 && option(sender, ERRORS) == (on == 1) && own(fd, level, name) == (on == 1));
+            assert(s->send(sender, TEXT("x"), 1, &nobody, &done) == 0 && done == 1);
+            if (on != 1) { assert(bits(sender, READ, 100 * MS) == 0 && s->receive(sender, &byte, 1, 0, NULL, &done) == DOTNET_PAL_WOULD_BLOCK); continue; }
+            assert(bits(sender, READ, 5000 * MS) == ERROR);
+            done = 7;
+            assert(s->receive(sender, &byte, 1, 0, NULL, &done) == DOTNET_PAL_CONNECTION_REFUSED && done == 0);
+            /* Reported once: the kernel keeps a copy in a queue the boundary never reads and would poll the socket as in error for it. */
+            assert(bits(sender, READ, 0) == 0 && s->receive(sender, &byte, 1, 0, NULL, &done) == DOTNET_PAL_WOULD_BLOCK && option(sender, DOTNET_PAL_SOCKET_ERROR) == DOTNET_PAL_OK);
+            assert(s->send(sender, TEXT("x"), 1, &nobody, &done) == 0 && bits(sender, READ, 5000 * MS) == ERROR);
+            assert(option(sender, DOTNET_PAL_SOCKET_ERROR) == DOTNET_PAL_CONNECTION_REFUSED && option(sender, DOTNET_PAL_SOCKET_ERROR) == DOTNET_PAL_OK && bits(sender, READ, 0) == 0);
+            ++reported;
+        }
+        /* Connected, which is how Ping uses the option: the same single report. */
+        assert(s->set_option(sender, ERRORS, 1) == 0 && s->connect(sender, &nobody) == 0 && s->send(sender, TEXT("x"), 1, NULL, &done) == 0 && bits(sender, READ, 5000 * MS) == ERROR);
+        assert(s->receive(sender, &byte, 1, 0, NULL, &done) == DOTNET_PAL_CONNECTION_REFUSED && bits(sender, READ, 0) == 0 && s->receive(sender, &byte, 1, 0, NULL, &done) == DOTNET_PAL_WOULD_BLOCK);
+        closed(sender, fd);
+    }
+    /* A stream's failures are its connection's, and a local socket has no network to complain (the kernel would take IP_RECVERR on a stream). */
+    void *others[3] = {open_socket(V4, TCP), open_socket(DOTNET_PAL_FAMILY_LOCAL, UDP), open_socket(DOTNET_PAL_FAMILY_LOCAL, TCP)};
+    for (int i = 0; i < 3; ++i) { unsupported(others[i], ERRORS); assert(s->close(others[i]) == 0); }
+    return reported;
+}
 static uint32_t peer_gone(void) {
     dotnet_pal_socket_address at; void *client, *accepted; size_t done = 7; uint32_t status = 0;
     void *server = listener(V4, &at);
@@ -430,7 +471,8 @@ static void validation(void) {
     bad.family = 9;
     assert(s->read_stats(&before, sizeof before) == 0);
     REJECT(s->create(0, TCP, &handle)); assert(handle == NULL);
-    REJECT(s->create(4, TCP, &handle)); REJECT(s->create(V4, 0, &handle)); REJECT(s->create(V4, 3, &handle)); REJECT(s->create(V4, TCP, NULL));
+    REJECT(s->create(4, TCP, &handle)); REJECT(s->create(V4, 0, &handle)); REJECT(s->create(V4, 4, &handle)); REJECT(s->create(V4, TCP, NULL));
+    REJECT(s->create(DOTNET_PAL_FAMILY_LOCAL, DOTNET_PAL_SOCKET_RAW, &handle)); assert(handle == NULL); /* a local socket speaks no ICMP */
     REJECT(s->close(NULL));
     REJECT(s->bind(NULL, &at)); REJECT(s->bind(socket, NULL)); REJECT(s->bind(socket, &bad));
     REJECT(s->listen(NULL, 1));
@@ -446,12 +488,14 @@ static void validation(void) {
     REJECT(s->shutdown(NULL, DOTNET_PAL_SHUTDOWN_BOTH)); REJECT(s->shutdown(socket, 0)); REJECT(s->shutdown(socket, 4));
     REJECT(s->local_address(NULL, &out[0])); REJECT(s->local_address(socket, NULL)); REJECT(s->peer_address(NULL, &out[0])); REJECT(s->peer_address(socket, NULL));
     REJECT(s->set_blocking(NULL, 1)); REJECT(s->set_blocking(socket, 2));
-    REJECT(s->get_option(NULL, DOTNET_PAL_SOCKET_ERROR, &value)); REJECT(s->get_option(socket, 0, &value)); REJECT(s->get_option(socket, 20, &value));
+    REJECT(s->get_option(NULL, DOTNET_PAL_SOCKET_ERROR, &value)); REJECT(s->get_option(socket, 0, &value)); REJECT(s->get_option(socket, 23, &value));
     REJECT(s->get_option(socket, DOTNET_PAL_SOCKET_ERROR, NULL));
     /* ERROR and AVAILABLE are read-only, flags are 0 or 1, and no value needs more than 32 bits. */
     REJECT(s->set_option(NULL, DOTNET_PAL_SOCKET_BROADCAST, 1)); REJECT(s->set_option(socket, 0, 1)); REJECT(s->set_option(socket, DOTNET_PAL_SOCKET_ERROR, 0));
     REJECT(s->set_option(socket, DOTNET_PAL_SOCKET_AVAILABLE, 0)); REJECT(s->set_option(socket, DOTNET_PAL_SOCKET_BROADCAST, 2));
-    REJECT(s->set_option(socket, DOTNET_PAL_SOCKET_LINGER, UINT64_C(0x100000000))); REJECT(s->set_option(socket, 20, 1));
+    REJECT(s->set_option(socket, DOTNET_PAL_SOCKET_LINGER, UINT64_C(0x100000000))); REJECT(s->set_option(socket, 23, 1));
+    REJECT(s->set_option(socket, DOTNET_PAL_SOCKET_PACKET_INFORMATION, 2)); REJECT(s->set_option(socket, DOTNET_PAL_SOCKET_DONT_FRAGMENT, 2));
+    REJECT(s->set_option(socket, DOTNET_PAL_SOCKET_RECEIVE_ERRORS, 2));
     /* A hop limit is one byte and unicast traffic needs one hop, MULTICAST_LOOPBACK is a flag, and an interface index has 32 bits. */
     REJECT(s->set_option(socket, DOTNET_PAL_SOCKET_HOPS, 256)); REJECT(s->set_option(socket, DOTNET_PAL_SOCKET_MULTICAST_HOPS, 256));
     REJECT(s->set_option(socket, DOTNET_PAL_SOCKET_HOPS, 0)); REJECT(s->set_option(socket, DOTNET_PAL_SOCKET_KEEP_ALIVE_INTERVAL, 0));
@@ -533,7 +577,7 @@ int main(int argc, char **argv) {
     options();
     udp();
     int six = ipv6();
-    unsigned multicast = tuning(six);
+    unsigned multicast = tuning(six), complaints = network_errors(six);
     uint32_t gone = peer_gone();
     size_t resolved = names();
     validation();
@@ -544,8 +588,9 @@ int main(int argc, char **argv) {
     assert(stats.bind_ok >= 7 && stats.listen_ok >= 5 && stats.connect_ok >= 5 && stats.send_ok >= 12 && stats.receive_ok >= 14 && stats.shutdown_ok == 1);
     assert(stats.address_ok >= 20 && stats.option_ok >= 76 && stats.poll_ok >= 17 && stats.wake_ok == 2 && stats.resolve_ok == 4);
     assert(stats.rejected_or_failed >= rejected + 10);
-    printf("SOCKETS PASS port=%u ipv6=%d receive_timeout=%s peer_gone=%s resolved=%zu sockets=%llu options=%llu multicast_interface=%u rejected=%u\n", port, six,
+    assert(complaints == (six ? 3u : 1u));
+    printf("SOCKETS PASS port=%u ipv6=%d receive_timeout=%s peer_gone=%s resolved=%zu sockets=%llu options=%llu multicast_interface=%u network_errors=%u rejected=%u\n", port, six,
         expiry == DOTNET_PAL_TIMEOUT ? "TIMEOUT" : "WOULD_BLOCK", gone == DOTNET_PAL_BROKEN_PIPE ? "BROKEN_PIPE" : "CONNECTION_RESET",
-        resolved, (unsigned long long)(stats.create_ok + stats.accept_ok), (unsigned long long)stats.option_ok, multicast, rejected);
+        resolved, (unsigned long long)(stats.create_ok + stats.accept_ok), (unsigned long long)stats.option_ok, multicast, complaints, rejected);
     return 0;
 }

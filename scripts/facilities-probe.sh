@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root="$PWD"
-expect="${PROBE_EXPECT-watches;mappings;volumes;network;local}"
+expect="${PROBE_EXPECT-watches;mappings;volumes;network;local;packets}"
 case "$(uname -m)" in x86_64) rid=linux-x64;; aarch64) rid=linux-arm64;; *) exit 2;; esac
 [[ "$(uname -s)" == Linux ]]
 overlay="$root/artifacts/source-sdk"
@@ -44,7 +44,8 @@ reached = {'watches': ('SystemNative_INotifyInit', 'SystemNative_INotifyAddWatch
            'mappings': ('SystemNative_MMap', 'SystemNative_MUnmap', 'SystemNative_MSync'),
            'volumes': ('SystemNative_GetSpaceInfoForMountPoint', 'SystemNative_GetFileSystemTypeNameForMountPoint'),
            'network': ('SystemNative_GetNetworkInterfaces', 'SystemNative_GetNameInfo', 'SystemNative_SetIPv4MulticastOption'),
-           'local': ('SystemNative_GetPeerID', 'SystemNative_GetDomainSocketSizes')}
+           'local': ('SystemNative_GetPeerID', 'SystemNative_GetDomainSocketSizes'),
+           'packets': ('SystemNative_TryGetIPPacketInformation', 'SystemNative_ReceiveMessage')}
 for needed in [name for group in os.environ['PROBE_GROUPS'].split(';') if group for name in reached.get(group, ())]:
     if needed not in providers: raise SystemExit(needed + ' is not in the image: the probe no longer reaches it')
 PY
