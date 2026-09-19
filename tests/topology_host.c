@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <sys/sysinfo.h>
 #include <unistd.h>
 #if defined(__aarch64__)
 #include <sys/auxv.h>
@@ -63,6 +64,41 @@ static uint32_t virtual_limit(uint64_t *limit) {
 static uint32_t cache_size(size_t *bytes) {
     long v = sysconf(_SC_LEVEL2_CACHE_SIZE); *bytes = v > 0 ? (size_t)v : 0; return DOTNET_PAL_OK;
 }
+static uint32_t cache_level_size(uint32_t level, size_t *bytes) {
+    if (pal_topology_fault == 2) { *bytes = 4096; return DOTNET_PAL_BUFFER_TOO_SMALL; } /* a status the group does not have */
+    static const int names[] = {_SC_LEVEL1_DCACHE_SIZE, _SC_LEVEL2_CACHE_SIZE, _SC_LEVEL3_CACHE_SIZE, _SC_LEVEL4_CACHE_SIZE};
+    if (level < 1 || level > DOTNET_PAL_MAX_CACHE_LEVEL) return DOTNET_PAL_INVALID_ARGUMENT;
+    long value = sysconf(names[level - 1]);
+    if (value > 0) { *bytes = (size_t)value; return DOTNET_PAL_OK; }
+    /* sysconf knows nothing of caches on AArch64; sysfs describes each one of CPU 0. */
+    *bytes = 0;
+    for (int index = 0; index < 8; ++index) {
+        char path[128]; char text[64]; unsigned long found = 0;
+        for (const char *what = "level"; what; what = strcmp(what, "level") == 0 ? "type" : strcmp(what, "type") == 0 ? "size" : NULL) {
+            snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu0/cache/index%d/%s", index, what);
+            FILE *file = fopen(path, "r");
+            if (!file) { found = 0; break; }
+            size_t read = fread(text, 1, sizeof text - 1, file);
+            fclose(file);
+            text[read] = 0;
+            if (strcmp(what, "level") == 0 && (unsigned long)atol(text) != (unsigned long)level) { found = 0; break; }
+            if (strcmp(what, "type") == 0 && strncmp(text, "Data", 4) != 0 && strncmp(text, "Unified", 7) != 0) { found = 0; break; }
+            if (strcmp(what, "size") == 0) found = strtoul(text, NULL, 10) * (strchr(text, 'K') ? 1024 : strchr(text, 'M') ? 1024 * 1024 : 1);
+        }
+        if (found > *bytes) *bytes = found;
+    }
+    return DOTNET_PAL_OK;
+}
+static uint32_t swap_memory(uint64_t *total, uint64_t *available) {
+    if (pal_topology_fault == 2) { *total = 4096; *available = 8192; return DOTNET_PAL_OK; } /* more free than there is */
+    struct sysinfo info;
+    if (sysinfo(&info) != 0) return DOTNET_PAL_OS_ERROR;
+    uint64_t unit = info.mem_unit == 0 ? 1 : (uint64_t)info.mem_unit;
+    *total = (uint64_t)info.totalswap * unit;
+    *available = (uint64_t)info.freeswap * unit;
+    if (*available > *total) *available = *total;
+    return DOTNET_PAL_OK;
+}
 static uint32_t cpu_features(uint64_t *first, uint64_t *second) {
 #if defined(__aarch64__)
     *first = getauxval(AT_HWCAP); *second = getauxval(AT_HWCAP2);
@@ -73,7 +109,8 @@ static uint32_t cpu_features(uint64_t *first, uint64_t *second) {
 }
 static const dotnet_pal_host_topology table = {
     {DOTNET_PAL_ABI_VERSION, sizeof(dotnet_pal_host_topology), DOTNET_PAL_CAP_TOPOLOGY},
-    {cpu_max, cpu_count, current_cpu, process_affinity, set_thread_affinity, physical_memory, memory_limit, virtual_limit, cache_size, cpu_features, NULL},
+    {cpu_max, cpu_count, current_cpu, process_affinity, set_thread_affinity, physical_memory, memory_limit, virtual_limit, cache_size, cpu_features, NULL,
+     cache_level_size, swap_memory},
 };
 static const dotnet_pal_host_topology malformed = {{DOTNET_PAL_ABI_VERSION, sizeof(dotnet_pal_host_topology), 0}, {0}};
 const dotnet_pal_host_topology *dotnet_pal_host_topology_v2(void) { return pal_topology_fault == 1 ? &malformed : &table; }

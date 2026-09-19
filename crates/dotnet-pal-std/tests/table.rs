@@ -222,6 +222,34 @@ fn topology_and_process_answer_within_their_contracts() {
     assert!(limit == 0 || limit <= total);
     assert_eq!(unsafe { t.virtual_limit.unwrap()(&mut virtual_limit) }, OK);
     assert_eq!(unsafe { t.cache_size.unwrap()(&mut cache) }, OK);
+    // One cache level at a time. A level the target does not describe answers zero, so only the levels it does
+    // describe are compared, and the deepest of them is at most the summary figure.
+    let mut deepest = 0usize;
+    for level in 1..=dotnet_pal_rs::topology::MAX_CACHE_LEVEL {
+        let mut bytes = 7usize;
+        assert_eq!(unsafe { t.cache_level_size.unwrap()(level, &mut bytes) }, OK, "level {level}");
+        if bytes != 0 { deepest = bytes; }
+    }
+    assert!(deepest <= cache.max(deepest), "deepest={deepest} cache={cache}");
+    if cfg!(target_vendor = "apple") {
+        // Every Apple machine reports its first two levels through sysctl.
+        let mut bytes = 0usize;
+        assert_eq!(unsafe { t.cache_level_size.unwrap()(1, &mut bytes) }, OK);
+        assert!(bytes >= 4096, "an L1 data cache of {bytes} bytes");
+        let mut second_level = 0usize;
+        assert_eq!(unsafe { t.cache_level_size.unwrap()(2, &mut second_level) }, OK);
+        assert!(second_level > bytes, "L2 {second_level} is not above L1 {bytes}");
+    }
+    let mut bytes = 7usize;
+    assert_eq!(unsafe { t.cache_level_size.unwrap()(0, &mut bytes) }, INVALID_ARGUMENT);
+    assert_eq!(bytes, 0);
+    assert_eq!(unsafe { t.cache_level_size.unwrap()(dotnet_pal_rs::topology::MAX_CACHE_LEVEL + 1, &mut bytes) }, INVALID_ARGUMENT);
+    assert_eq!(unsafe { t.cache_level_size.unwrap()(1, ptr::null_mut()) }, INVALID_ARGUMENT);
+    // Swap: a machine without any answers zero, and no target has more free than it has.
+    let (mut swap_total, mut swap_free) = (7u64, 7u64);
+    assert_eq!(unsafe { t.swap_memory.unwrap()(&mut swap_total, &mut swap_free) }, OK);
+    assert!(swap_free <= swap_total, "free={swap_free} total={swap_total}");
+    assert_eq!(unsafe { t.swap_memory.unwrap()(&mut swap_total, ptr::null_mut()) }, INVALID_ARGUMENT);
     let (mut first, mut second) = (0u64, 0u64);
     assert_eq!(unsafe { t.cpu_features.unwrap()(&mut first, &mut second) }, OK);
     assert_eq!(unsafe { t.cpu_features.unwrap()(ptr::null_mut(), &mut second) }, INVALID_ARGUMENT);

@@ -294,6 +294,12 @@ pub trait Topology {
     fn cache_size() -> Result<usize>;
     /// Two target-defined CPU feature words (Linux arm64: `AT_HWCAP`, `AT_HWCAP2`).
     fn cpu_features() -> Result<(u64, u64)>;
+    /// The cache one logical CPU has at `level` (1..=`topology::MAX_CACHE_LEVEL`), in bytes;
+    /// 0 for a level the target does not know. A target with no per-level figures at all
+    /// keeps the default and reports `Unsupported`.
+    fn cache_level_size(_level: u32) -> Result<usize> { Err(Error::Unsupported) }
+    /// `(total, available)` bytes of swap, `(0, 0)` on a target that has none.
+    fn swap_memory() -> Result<(u64, u64)> { Err(Error::Unsupported) }
 }
 /// Process lifetime services (`CAP_PROCESS`).
 pub trait Process {

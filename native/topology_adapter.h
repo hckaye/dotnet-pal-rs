@@ -42,5 +42,15 @@ inline uint64_t memory_limit() { uint64_t v = 0; return require()->memory_limit(
 inline uint64_t virtual_limit() { uint64_t v = 0; return require()->virtual_limit(&v) == DOTNET_PAL_OK ? v : 0; }
 inline size_t cache_size() { size_t v = 0; return require()->cache_size(&v) == DOTNET_PAL_OK ? v : 0; }
 inline bool features(uint64_t &first, uint64_t &second) { return require()->cpu_features(&first, &second) == DOTNET_PAL_OK; }
+// Added after the group's first shape: a table built before them leaves them NULL, and a port that cannot
+// answer reports UNSUPPORTED. Both read as "nothing known", which is what the runtime's own fallbacks expect.
+inline size_t cache_level(uint32_t level) {
+    const auto *t = require(); size_t v = 0;
+    return t->cache_level_size && t->cache_level_size(level, &v) == DOTNET_PAL_OK ? v : 0;
+}
+inline uint64_t available_swap() {
+    const auto *t = require(); uint64_t total = 0, available = 0;
+    return t->swap_memory && t->swap_memory(&total, &available) == DOTNET_PAL_OK ? available : 0;
+}
 }
 #endif

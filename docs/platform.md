@@ -17,17 +17,30 @@ before reading the callbacks.
 
 | Group | Capability bit | Callbacks | Trait |
 | --- | --- | --- | --- |
-| `topology` | `DOTNET_PAL_CAP_TOPOLOGY` | `cpu_max`, `cpu_count`, `current_cpu`, `process_affinity`, `set_thread_affinity`, `physical_memory`, `memory_limit`, `virtual_limit`, `cache_size`, `cpu_features` | `port::Topology` |
+| `topology` | `DOTNET_PAL_CAP_TOPOLOGY` | `cpu_max`, `cpu_count`, `current_cpu`, `process_affinity`, `set_thread_affinity`, `physical_memory`, `memory_limit`, `virtual_limit`, `cache_size`, `cache_level_size`, `swap_memory`, `cpu_features` | `port::Topology` |
 | `process` | `DOTNET_PAL_CAP_PROCESS` | `exit`, `debugger_present`, `crash_dump` | `port::Process` |
 | `image` | `DOTNET_PAL_CAP_IMAGE` | `unwind_info`, `readable`, `build_id` | `port::Image` |
 | `streams` | `DOTNET_PAL_CAP_STREAMS` | `write`, `read`, `is_terminal` | `port::Streams` |
 
 Topology answers are logical CPU counts, a little-endian affinity bitmap, memory
 figures within the limit in force (a container limit when one exists), the largest
-per-CPU data cache and two target-defined CPU feature words (Linux arm64: `AT_HWCAP`
-and `AT_HWCAP2`). A question the target cannot answer returns `UNSUPPORTED` for that
-call; the capability stays whole. NUMA placement is not part of the boundary: every
-consumer sees one node.
+per-CPU data cache, the cache of one logical CPU at each level from 1 to
+`DOTNET_PAL_MAX_CACHE_LEVEL` (level 1 being its data cache; 0 for a level the target
+does not describe), the total and available swap within the same limit, and two
+target-defined CPU feature words (Linux arm64: `AT_HWCAP` and `AT_HWCAP2`). A question
+the target cannot answer returns `UNSUPPORTED` for that call; the capability stays
+whole. `cache_level_size` and `swap_memory` were added after the group's first shape:
+a provider that predates them leaves them absent, and the runtime adapter reads that as
+"nothing known", which is what its own fallbacks expect. NUMA placement is not part of
+the boundary: every consumer sees one node.
+
+The Linux provider takes the per-level sizes from `sysconf`, which answers on x86 and
+not on AArch64, and from `/sys/devices/system/cpu/cpu0/cache` otherwise, where it reads
+the data and unified caches of that level. Swap comes from `sysinfo`, capped by the
+`memory.swap.max` of the process's cgroup and what it has already charged, so a
+container reports its own swap and not the machine's. The `std` port does the same on
+Linux, reads `hw.l1dcachesize`, `hw.l2cachesize`, `hw.l3cachesize` and `vm.swapusage`
+on macOS, and on Windows reports what the commit limit has beyond physical memory.
 
 `process.exit` never returns. `crash_dump` runs an argument vector as a crash-dump
 utility that may inspect the process and waits for it; a port without such a facility
@@ -55,8 +68,10 @@ runs the conformance tests against the kernel's own answers.
 `minipal_patch.py` route the remaining OS calls of the pinned runtime through these
 groups:
 
-- The GC's CPU and memory queries, affinity and cache size use `topology`; the cgroup,
-  cgroup CPU and NUMA readers are compiled out.
+- The GC's CPU and memory queries, affinity, cache sizes and the swap it reports as the
+  commit room left (`GetAvailablePageFile`) use `topology`; the cgroup, cgroup CPU and
+  NUMA readers are compiled out. The GC asks for the deepest cache level that answers,
+  as the C library's own loop does, and keeps its heuristic as a lower bound.
 - The crash-dump launch uses `process.crash_dump`; the runtime keeps its argument
   building and the utility path comes from the `runtime` group's module name.
 - The unwinder's section lookup, its readability probe and its diagnostic lines use

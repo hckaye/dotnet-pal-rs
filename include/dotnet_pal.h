@@ -249,10 +249,20 @@ typedef struct {dotnet_pal_header header;dotnet_pal_support_ops ops;} dotnet_pal
  * the total and available bytes within the limit in force for this process
  * (container or job limit when one exists), memory_limit that limit or 0 when
  * none, virtual_limit the address-space limit or 0. cache_size is the largest
- * per-CPU data cache or 0 when unknown. cpu_features returns two target-defined
- * words (Linux arm64: AT_HWCAP and AT_HWCAP2; zero on targets without them).
+ * per-CPU data cache or 0 when unknown, and cache_level_size the cache one
+ * logical CPU has at a level (1..DOTNET_PAL_MAX_CACHE_LEVEL; level 1 is its
+ * data cache, the levels above it the caches of that number, shared or not),
+ * 0 for a level the target does not know and INVALID_ARGUMENT outside the
+ * range. swap_memory reports the total and the currently available swap in
+ * bytes, within the limit in force for this process as physical_memory is,
+ * and 0 and 0 on a target that has no swap. cpu_features returns two
+ * target-defined words (Linux arm64: AT_HWCAP and AT_HWCAP2; zero on targets
+ * without them). The two calls after read_stats are a later addition: a
+ * provider that cannot answer them reports UNSUPPORTED, and a table built
+ * before them leaves them NULL.
  * NUMA placement is not part of the boundary: consumers see one node. */
 #define DOTNET_PAL_CAP_TOPOLOGY UINT64_C(8388608)
+#define DOTNET_PAL_MAX_CACHE_LEVEL 4u
 typedef struct {
     uint64_t cpu_ok, affinity_ok, memory_ok, cache_ok, features_ok, rejected_or_failed;
 } dotnet_pal_topology_stats;
@@ -268,6 +278,8 @@ typedef struct {
     uint32_t (*cache_size)(size_t *bytes);
     uint32_t (*cpu_features)(uint64_t *first, uint64_t *second);
     uint32_t (*read_stats)(dotnet_pal_topology_stats *out, size_t size);
+    uint32_t (*cache_level_size)(uint32_t level, size_t *bytes);
+    uint32_t (*swap_memory)(uint64_t *total, uint64_t *available);
 } dotnet_pal_topology_ops;
 typedef struct { dotnet_pal_header header; dotnet_pal_topology_ops ops; } dotnet_pal_host_topology;
 

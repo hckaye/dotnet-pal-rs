@@ -226,6 +226,33 @@ fn cgroup_memory_limit() -> Option<u64> {
         _ => None,
     }
 }
+/// The tightest swap limit and the swap charged, walking from the process cgroup up to the
+/// hierarchy mount as the memory limit does. Only the unified hierarchy separates swap from
+/// memory; version 1 counts the two together, so nothing is reported for it.
+fn cgroup_swap() -> Option<(u64, u64)> {
+    let groups = cgroups();
+    if groups.version != 2 || groups.memory.length == 0 { return None; }
+    let mut directory = Path::new();
+    directory.set(groups.memory.as_slice());
+    let (mut limit, mut used) = (None::<u64>, None::<u64>);
+    loop {
+        if let Some(value) = file_size_value(directory.as_slice(), b"/memory.swap.max") { limit = Some(limit.map_or(value, |b: u64| b.min(value))); }
+        if used.is_none() { used = file_size_value(directory.as_slice(), b"/memory.swap.current"); }
+        if directory.length <= groups.memory_mount.length { break; }
+        let Some(slash) = directory.as_slice().iter().rposition(|b| *b == b'/') else { break; };
+        if slash < groups.memory_mount.length { break; }
+        directory.length = slash; directory.bytes[slash] = 0;
+    }
+    limit.map(|limit| (limit, used.unwrap_or(0)))
+}
+/// One value of one cache of CPU 0, as sysfs spells it out.
+fn cache_attribute(index: u8, name: &[u8], buffer: &mut [u8]) -> Option<usize> {
+    let mut path = Path::new();
+    let mut directory = *b"/sys/devices/system/cpu/cpu0/cache/index0";
+    *directory.last_mut()? = b'0' + index;
+    if !path.set(&directory) || !path.push(name) { return None; }
+    read_file(path.c_str(), buffer)
+}
 /// Bytes charged to the cgroup, excluding inactive file cache, like the GC's reading.
 fn cgroup_memory_usage() -> Option<u64> {
     let groups = cgroups();
@@ -378,6 +405,41 @@ impl port::Topology for Linux {
             }
         }
         usize::try_from(best).map_err(|_| Error::Os)
+    }
+    fn cache_level_size(level: u32) -> Result<usize> {
+        let name = match level {
+            1 => libc::_SC_LEVEL1_DCACHE_SIZE, 2 => libc::_SC_LEVEL2_CACHE_SIZE, 3 => libc::_SC_LEVEL3_CACHE_SIZE, 4 => libc::_SC_LEVEL4_CACHE_SIZE,
+            _ => return Err(Error::InvalidArgument),
+        };
+        let value = unsafe { libc::sysconf(name) };
+        if value > 0 { return usize::try_from(value as u64).map_err(|_| Error::Os); }
+        // The C library answers these from the CPU on x86 and from nothing at all on AArch64; sysfs has them there.
+        let mut best: u64 = 0;
+        for index in 0..8u8 {
+            let mut buffer = [0u8; 64];
+            let Some(found) = cache_attribute(index, b"/level", &mut buffer) else { continue; };
+            if parse_size(&buffer[..found]) != Some(level as u64) { continue; }
+            let Some(kind) = cache_attribute(index, b"/type", &mut buffer) else { continue; };
+            // An instruction cache is not what a consumer sizing its data structures asks for.
+            if !(starts_with(&buffer[..kind], b"Data") || starts_with(&buffer[..kind], b"Unified")) { continue; }
+            let Some(size) = cache_attribute(index, b"/size", &mut buffer) else { continue; };
+            if let Some(found) = parse_size(&buffer[..size]) { best = best.max(found); }
+        }
+        usize::try_from(best).map_err(|_| Error::Os)
+    }
+    fn swap_memory() -> Result<(u64, u64)> {
+        let mut info = mem::MaybeUninit::<libc::sysinfo>::uninit();
+        if unsafe { libc::sysinfo(info.as_mut_ptr()) } != 0 { return Err(Error::Os); }
+        let info = unsafe { info.assume_init() };
+        // Older kernels report every figure in bytes, which they mark with a unit of zero.
+        let unit = if info.mem_unit == 0 { 1u64 } else { info.mem_unit as u64 };
+        let (mut total, mut available) = (info.totalswap as u64 * unit, info.freeswap as u64 * unit);
+        // A container's own limit stands in for the machine's, as it does for physical memory.
+        if let Some((limit, used)) = cgroup_swap() {
+            total = total.min(limit);
+            available = available.min(limit.saturating_sub(used));
+        }
+        Ok((total, available.min(total)))
     }
     fn cpu_features() -> Result<(u64, u64)> {
         #[cfg(target_arch = "aarch64")]

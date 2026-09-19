@@ -90,6 +90,8 @@ impl port::Topology for Baremetal {
     }
     fn memory_limit() -> Result<u64> { Ok(0) }
     fn virtual_limit() -> Result<u64> { Ok(0) }
+    /// The machine has no swap device, which is an answer rather than a gap.
+    fn swap_memory() -> Result<(u64, u64)> { Ok((0, 0)) }
     fn cache_size() -> Result<usize> { Ok(0) }
     fn cpu_features() -> Result<(u64, u64)> { Ok(hwcap()) }
 }

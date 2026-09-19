@@ -458,6 +458,17 @@ pub mod topology {
             call!(cpu_features(&mut first, &mut second))?;
             Ok((first, second))
         }
+        /// Added after the group's first shape: a host table built before them leaves them NULL.
+        fn cache_level_size(level: u32) -> Result<usize> {
+            let mut value = 0;
+            call!(cache_level_size(level, &mut value))?;
+            Ok(value)
+        }
+        fn swap_memory() -> Result<(u64, u64)> {
+            let (mut total, mut available) = (0, 0);
+            call!(swap_memory(&mut total, &mut available))?;
+            Ok((total, available))
+        }
     }
 }
 

@@ -188,6 +188,68 @@ impl port::Topology for Std {
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         { Ok(0) }
     }
+    fn cache_level_size(level: u32) -> Result<usize> {
+        #[cfg(target_os = "linux")]
+        {
+            let name = match level {
+                1 => libc::_SC_LEVEL1_DCACHE_SIZE, 2 => libc::_SC_LEVEL2_CACHE_SIZE, 3 => libc::_SC_LEVEL3_CACHE_SIZE, 4 => libc::_SC_LEVEL4_CACHE_SIZE,
+                _ => return Err(Error::InvalidArgument),
+            };
+            let value = unsafe { libc::sysconf(name) };
+            if value > 0 { return usize::try_from(value as u64).map_err(|_| Error::Os); }
+            // The C library answers these from the CPU on x86 and from nothing at all on AArch64; sysfs has them there.
+            let mut best = 0u64;
+            for index in 0..8 {
+                let directory = format!("/sys/devices/system/cpu/cpu0/cache/index{index}");
+                if read(&format!("{directory}/level")).and_then(|t| t.trim().parse::<u32>().ok()) != Some(level) { continue; }
+                // An instruction cache is not what a consumer sizing its data structures asks for.
+                if !read(&format!("{directory}/type")).is_some_and(|t| t.starts_with("Data") || t.starts_with("Unified")) { continue; }
+                if let Some(size) = read(&format!("{directory}/size")).and_then(|t| parse_size(&t)) { best = best.max(size); }
+            }
+            usize::try_from(best).map_err(|_| Error::Os)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            // The system reports three levels; a fourth is not among its keys.
+            let name = match level {
+                1 => c"hw.l1dcachesize", 2 => c"hw.l2cachesize", 3 => c"hw.l3cachesize", 4 => return Ok(0), _ => return Err(Error::InvalidArgument),
+            };
+            let (mut value, mut size) = (0u64, std::mem::size_of::<u64>());
+            if unsafe { libc::sysctlbyname(name.as_ptr(), (&mut value as *mut u64).cast(), &mut size, std::ptr::null_mut(), 0) } != 0 { return Ok(0); }
+            usize::try_from(value).map_err(|_| Error::Os)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        { let _ = level; Err(Error::Unsupported) }
+    }
+    fn swap_memory() -> Result<(u64, u64)> {
+        #[cfg(target_os = "linux")]
+        {
+            let mut info: libc::sysinfo = unsafe { std::mem::zeroed() };
+            if unsafe { libc::sysinfo(&mut info) } != 0 { return Err(Error::Os); }
+            // Older kernels report every figure in bytes, which they mark with a unit of zero.
+            let unit = if info.mem_unit == 0 { 1u64 } else { info.mem_unit as u64 };
+            let (mut total, mut available) = (info.totalswap as u64 * unit, info.freeswap as u64 * unit);
+            // A container's own limit stands in for the machine's, as it does for physical memory. Only the unified
+            // hierarchy separates swap from memory, and only the process's own group is read here.
+            if let Some(directory) = cgroup_directory() {
+                if let Some(limit) = read(&format!("{directory}/memory.swap.max")).and_then(|t| parse_size(&t)) {
+                    let used = read(&format!("{directory}/memory.swap.current")).and_then(|t| parse_size(&t)).unwrap_or(0);
+                    total = total.min(limit);
+                    available = available.min(limit.saturating_sub(used));
+                }
+            }
+            Ok((total, available.min(total)))
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let (mut usage, mut size) = (unsafe { std::mem::zeroed::<libc::xsw_usage>() }, std::mem::size_of::<libc::xsw_usage>());
+            let asked = unsafe { libc::sysctlbyname(c"vm.swapusage".as_ptr(), (&mut usage as *mut libc::xsw_usage).cast(), &mut size, std::ptr::null_mut(), 0) };
+            if asked != 0 { return Err(Error::Os); }
+            Ok((usage.xsu_total, usage.xsu_avail.min(usage.xsu_total)))
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        { Err(Error::Unsupported) }
+    }
     fn cpu_features() -> Result<(u64, u64)> {
         #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
         { Ok((unsafe { libc::getauxval(libc::AT_HWCAP) } as u64, unsafe { libc::getauxval(libc::AT_HWCAP2) } as u64)) }
@@ -224,6 +286,16 @@ impl port::Topology for Std {
     fn memory_limit() -> Result<u64> { Ok(0) }
     fn virtual_limit() -> Result<u64> { Ok(0) }
     fn cache_size() -> Result<usize> { Ok(0) }
+    fn cache_level_size(_: u32) -> Result<usize> { Ok(0) }
+    fn swap_memory() -> Result<(u64, u64)> {
+        use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+        let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+        status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+        if unsafe { GlobalMemoryStatusEx(&mut status) } == 0 { return Err(Error::Os); }
+        // The page file is what the commit limit has beyond physical memory; the system reports the two together.
+        let total = status.ullTotalPageFile.saturating_sub(status.ullTotalPhys);
+        Ok((total, status.ullAvailPageFile.saturating_sub(status.ullAvailPhys).min(total)))
+    }
     fn cpu_features() -> Result<(u64, u64)> { Ok((0, 0)) }
 }
 

@@ -170,6 +170,13 @@ shows as well:
 - An allocation of 10^15 bytes, which `dotnet-pal-memfs` expects the allocator to refuse,
   ends the process with an error message of the emulator.
 
+The cache sizes the topology group reports per level come from `sysconf` on x86-64, where
+the emulator passes the host's figures through: that run reports a 128 KiB first level and
+an 8 MiB second one, which `tests/topology.c` compares with `sysconf` itself. The ARM64
+container has no cache sizes to report at all, neither through `sysconf` nor in
+`/sys/devices/system/cpu/cpu0/cache`, whose entries there carry a level and a type but no
+size, so every level answers zero on it and the sysfs path stays uncovered by a run.
+
 These results say that the providers compile and behave on the x86-64 ABI (structure
 layouts, signal frames, system call numbers). They do not replace a run on x86-64
 hardware. The runtime turns faults into managed exceptions through the `faults` group on

@@ -175,6 +175,10 @@ static void check_table(void) {
     REQUIRE(api->topology.cpu_count(&cpus) == DOTNET_PAL_OK && cpus == 1, "one cpu");
     uint64_t total = 0, available = 0;
     REQUIRE(api->topology.physical_memory(&total, &available) == DOTNET_PAL_OK && total > 0 && available <= total, "memory figures");
+    uint64_t swap_total = 7, swap_free = 7;
+    REQUIRE(api->topology.swap_memory(&swap_total, &swap_free) == DOTNET_PAL_OK && swap_total == 0 && swap_free == 0, "no swap device");
+    size_t cache_level = 7;
+    REQUIRE(api->topology.cache_level_size(1, &cache_level) == DOTNET_PAL_UNSUPPORTED && cache_level == 0, "no cache description");
     REQUIRE(api->process.debugger_present(&present) == DOTNET_PAL_OK && present == 0, "no debugger");
     REQUIRE(api->process.crash_dump(NULL, 0, NULL, 0) == DOTNET_PAL_INVALID_ARGUMENT, "crash dump arguments");
     dotnet_pal_unwind_info unwind;

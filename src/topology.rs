@@ -12,6 +12,8 @@ use core::mem;
 pub const CAP: u64 = 8388608;
 /// Upper bound on a reported CPU count: the GC stores processor numbers in 16 bits.
 pub const MAX_CPUS: u32 = 65535;
+/// Deepest cache level a target reports; level 1 is one CPU's data cache.
+pub const MAX_CACHE_LEVEL: u32 = 4;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -27,6 +29,8 @@ pub struct Ops {
     pub cache_size: Option<unsafe extern "C" fn(*mut usize) -> u32>,
     pub cpu_features: Option<unsafe extern "C" fn(*mut u64, *mut u64) -> u32>,
     pub read_stats: Option<unsafe extern "C" fn(*mut Stats, usize) -> u32>,
+    pub cache_level_size: Option<unsafe extern "C" fn(u32, *mut usize) -> u32>,
+    pub swap_memory: Option<unsafe extern "C" fn(*mut u64, *mut u64) -> u32>,
 }
 #[repr(C)]
 pub struct Host { pub header: Header, pub ops: Ops }
@@ -104,6 +108,25 @@ unsafe extern "C" fn cache_size<T: Topology>(out: *mut usize) -> u32 {
         Err(e) => record(e.status(), 3),
     }
 }
+unsafe extern "C" fn cache_level_size<T: Topology>(level: u32, out: *mut usize) -> u32 {
+    if !aligned_output(out) { return record(INVALID_ARGUMENT, 3); }
+    unsafe { out.write(0) };
+    if !(1..=MAX_CACHE_LEVEL).contains(&level) { return record(INVALID_ARGUMENT, 3); }
+    match T::cache_level_size(level) {
+        Ok(v) => { unsafe { out.write(v) }; record(OK, 3) }
+        Err(e) => record(e.status(), 3),
+    }
+}
+unsafe extern "C" fn swap_memory<T: Topology>(total: *mut u64, available: *mut u64) -> u32 {
+    if !aligned_output(total) || !aligned_output(available) { return record(INVALID_ARGUMENT, 2); }
+    unsafe { total.write(0); available.write(0) };
+    match T::swap_memory() {
+        // More swap free than there is: no consumer can act on that.
+        Ok((t, a)) if a > t => record(OS_ERROR, 2),
+        Ok((t, a)) => { unsafe { total.write(t); available.write(a) }; record(OK, 2) }
+        Err(e) => record(e.status(), 2),
+    }
+}
 unsafe extern "C" fn cpu_features<T: Topology>(first: *mut u64, second: *mut u64) -> u32 {
     if !aligned_output(first) || !aligned_output(second) { return record(INVALID_ARGUMENT, 4); }
     unsafe { first.write(0); second.write(0) };
@@ -119,7 +142,8 @@ unsafe extern "C" fn read_stats(out: *mut Stats, size: usize) -> u32 {
     OK
 }
 pub const EMPTY: Ops = Ops { cpu_max: None, cpu_count: None, current_cpu: None, process_affinity: None, set_thread_affinity: None,
-    physical_memory: None, memory_limit: None, virtual_limit: None, cache_size: None, cpu_features: None, read_stats: Some(read_stats) };
+    physical_memory: None, memory_limit: None, virtual_limit: None, cache_size: None, cpu_features: None, read_stats: Some(read_stats),
+    cache_level_size: None, swap_memory: None };
 /// Capability bit and callbacks for the port's topology provider. Every callback
 /// is present when the capability is; a provider reports what it cannot know
 /// with `Unsupported` per call rather than a missing pointer.
@@ -129,5 +153,6 @@ pub fn negotiate<P: Port>() -> (u64, Ops) {
     (CAP, Ops { cpu_max: Some(cpu_max::<T<P>>), cpu_count: Some(cpu_count::<T<P>>), current_cpu: Some(current_cpu::<T<P>>),
         process_affinity: Some(process_affinity::<T<P>>), set_thread_affinity: Some(set_thread_affinity::<T<P>>),
         physical_memory: Some(physical_memory::<T<P>>), memory_limit: Some(memory_limit::<T<P>>), virtual_limit: Some(virtual_limit::<T<P>>),
-        cache_size: Some(cache_size::<T<P>>), cpu_features: Some(cpu_features::<T<P>>), read_stats: Some(read_stats) })
+        cache_size: Some(cache_size::<T<P>>), cpu_features: Some(cpu_features::<T<P>>), read_stats: Some(read_stats),
+        cache_level_size: Some(cache_level_size::<T<P>>), swap_memory: Some(swap_memory::<T<P>>) })
 }

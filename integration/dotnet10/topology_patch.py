@@ -1,9 +1,10 @@
-"""Route CPU counts, affinity, memory accounting and cache size through the PAL.
+"""Route CPU counts, affinity, memory accounting, cache sizes and swap through the PAL.
 
 The cgroup, cgroup CPU and NUMA readers of the pinned runtime are compiled out:
 the topology group reports container limits already applied, and the boundary
 exposes no NUMA placement (every consumer sees one node). The GC's per-CPU
-cache heuristic stays in the runtime because it needs no OS.
+cache heuristic stays in the runtime because it needs no OS: it is the lower bound
+for a target whose caches the boundary cannot describe.
 """
 import re
 from kernel_patch import once
@@ -81,12 +82,16 @@ def gc(text):
                     "    uint64_t limit = dotnet_pal_topology::virtual_limit();\n    if (limit != 0 && limit <= SIZE_MAX) return static_cast<size_t>(limit);\n    return GetVirtualMemoryMaxAddress();")
     text = function(text, "GetAvailablePhysicalMemory",
                     "    uint64_t total = 0, available = 0;\n    return dotnet_pal_topology::physical(total, available) ? available : 0;")
-    # Swap accounting is not exposed by the boundary; the GC treats 0 as unknown.
-    text = function(text, "GetAvailablePageFile", "    return 0;")
+    text = function(text, "GetAvailablePageFile", "    return dotnet_pal_topology::available_swap();")
+    # The deepest level that answers is the figure the GC wants, which is how the C library's own loop reads it.
     text = function(text, "GetLogicalProcessorCacheSizeFromOS",
-                    "    size_t cacheLevel = 0;\n    size_t cacheSize = dotnet_pal_topology::cache_size();\n"
+                    "    size_t cacheLevel = 0;\n    size_t cacheSize = 0;\n"
+                    "    for (uint32_t level = DOTNET_PAL_MAX_CACHE_LEVEL; level >= 1; level--)\n    {\n"
+                    "        size_t size = dotnet_pal_topology::cache_level(level);\n"
+                    "        if (size > 0) { cacheSize = size; cacheLevel = level; break; }\n    }\n"
+                    "    if (cacheSize == 0) cacheSize = dotnet_pal_topology::cache_size();\n"
                     "#if (defined(HOST_ARM64) || defined(HOST_LOONGARCH64)) && !defined(TARGET_APPLE)\n"
-                    "    // The boundary reports no cache level, so the upstream heuristic applies as a lower bound.\n"
+                    "    // The upstream heuristic applies as a lower bound, as it does on a target whose caches the OS describes.\n"
                     "    size_t heuristic = 0;\n    GetLogicalProcessorCacheSizeFromHeuristic(&cacheLevel, &heuristic);\n    if (heuristic > cacheSize) cacheSize = heuristic;\n"
                     "#else\n    if (cacheSize == 0) GetLogicalProcessorCacheSizeFromHeuristic(&cacheLevel, &cacheSize);\n#endif\n    return cacheSize;")
     # Readers that only serve the replaced paths stay out of the PAL build.
