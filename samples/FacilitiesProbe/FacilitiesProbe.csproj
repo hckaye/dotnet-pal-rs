@@ -26,7 +26,7 @@
     <DefineConstants Condition="$(ProbeExpect.Contains('packets'))">$(DefineConstants);EXPECT_PACKETS</DefineConstants>
     <DefineConstants Condition="$(ProbeExpect.Contains('noentropy'))">$(DefineConstants);EXPECT_NO_ENTROPY</DefineConstants>
     <PalRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))</PalRoot>
-    <PalLib Condition="'$(PalLib)' == ''">$(PalRoot)/target/release/libdotnet_pal_rs.a</PalLib>
+    <PalLib Condition="'$(PalLib)' == ''">$(PalRoot)/target/release/libdotnet_pal_standalone.a</PalLib>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>

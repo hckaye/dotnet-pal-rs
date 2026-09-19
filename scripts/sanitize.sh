@@ -15,13 +15,13 @@ export ASAN_OPTIONS=detect_leaks=1:detect_stack_use_after_return=1:halt_on_error
 # The priority test starts threads in a forked child of a threaded parent, which the thread sanitizer refuses by default.
 export TSAN_OPTIONS=halt_on_error=1:exitcode=66:handle_segv=0:handle_sigbus=0:die_after_fork=0
 export RUSTFLAGS="-Zsanitizer=$sanitizer -Zexternal-clangrt -Cdebuginfo=1 -Cforce-frame-pointers=yes"
-common=(-O1 -g -fno-omit-frame-pointer -fsanitize="$sanitizer" -Wall -Wextra -Werror -Iinclude -Inative)
+common=(-O1 -g -fno-omit-frame-pointer -fsanitize="$sanitizer" -Wall -Wextra -Werror -Iinclude -Icrates/dotnet-pal-build/native)
 for backend in linux host-runtime host-support linear linear-heap; do
-  cargo "+$rust" rustc -Zbuild-std=core,compiler_builtins --lib --crate-type staticlib --release --no-default-features \
+  cargo "+$rust" rustc -p dotnet-pal-standalone -Zbuild-std=core,compiler_builtins --lib --crate-type staticlib --release --no-default-features \
     --features "$backend" --target "$triple" --target-dir "target/$sanitizer-$backend"
-  lib="target/$sanitizer-$backend/$triple/release/libdotnet_pal_rs.a"
+  lib="target/$sanitizer-$backend/$triple/release/libdotnet_pal_standalone.a"
   if [[ "$backend" == host-support ]]; then
-    clang -std=c11 "${common[@]}" tests/support.c native/support_posix.c tests/host_backend.c "$lib" -Wl,--gc-sections -lpthread -ldl -lm -o "$out/support-host"
+    clang -std=c11 "${common[@]}" tests/support.c crates/dotnet-pal-posix/native/support_posix.c tests/host_backend.c "$lib" -Wl,--gc-sections -lpthread -ldl -lm -o "$out/support-host"
     timeout 120s "$out/support-host"
     clang -std=c11 "${common[@]}" tests/support_faults.c tests/host_backend.c "$lib" -Wl,--gc-sections -lpthread -ldl -lm -o "$out/support-faults"
     for mode in {1..12}; do timeout 30s "$out/support-faults" "$mode"; done

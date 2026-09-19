@@ -84,7 +84,7 @@ closed; a pipe write reports `BROKEN_PIPE` then, and never raises a signal.
 
 The BCL's `Process` class starts a child with one call that also makes the pipes, learns
 that a child has ended from `SIGCHLD`, and collects the exit code by process id.
-`native/system_native_proc.c` gives each child a watcher thread instead: it blocks in
+`crates/dotnet-pal-build/native/system_native_proc.c` gives each child a watcher thread instead: it blocks in
 `wait`, records the exit code and then calls the callback `Process` registered, exactly
 where the reference implementation's signal thread would have. The pipes become
 descriptors of the same table that holds files and sockets, so `Read`, `Write`, `Dup`
@@ -169,14 +169,14 @@ root in a default Docker container lacks `CAP_SYS_NICE` and gets `ACCESS_DENIED`
 ## Module loading
 
 `NativeLibrary.Load`, `GetExport` and `Free` go through the `runtime` group's module
-callbacks (`SystemNative_LoadLibrary` and its companions in `native/system_native_sys.c`).
+callbacks (`SystemNative_LoadLibrary` and its companions in `crates/dotnet-pal-build/native/system_native_sys.c`).
 A port without `Modules` loads nothing.
 
 ## Providers
 
 | Provider | `SystemInfo` | `Notifications` | `Processes` | `Terminal` | `Accounts`, `Priority` and `SpawnAs` |
 | --- | --- | --- | --- | --- | --- |
-| Linux backend (`linux` feature) | `src/linux_system.rs` | `src/linux_notifications.rs`: signals through a self-pipe to a dispatcher thread | `src/linux_processes.rs`: `posix_spawn`, waits through a pidfd, or by polling where the kernel has none | `src/linux_terminal.rs`: termios | `src/linux_accounts.rs`: `getpwuid_r`, `getpwnam_r`, `getgroups`, `getgrouplist`; `src/linux_priority.rs`: `getpriority`, `setpriority` per thread; `spawn_as` in `src/linux_processes.rs`: `fork`, then `setgroups`, `setgid`, `setuid`, `execve` |
+| Linux backend (`linux` feature) | `crates/dotnet-pal-linux/src/linux_system.rs` | `crates/dotnet-pal-linux/src/linux_notifications.rs`: signals through a self-pipe to a dispatcher thread | `crates/dotnet-pal-linux/src/linux_processes.rs`: `posix_spawn`, waits through a pidfd, or by polling where the kernel has none | `crates/dotnet-pal-linux/src/linux_terminal.rs`: termios | `crates/dotnet-pal-linux/src/linux_accounts.rs`: `getpwuid_r`, `getpwnam_r`, `getgroups`, `getgrouplist`; `crates/dotnet-pal-linux/src/linux_priority.rs`: `getpriority`, `setpriority` per thread; `spawn_as` in `crates/dotnet-pal-linux/src/linux_processes.rs`: `fork`, then `setgroups`, `setgid`, `setuid`, `execve` |
 | Desktop `std` port | `std::env`, `libc` for the rest | the same design with `std::thread` | `std::process::Command` | termios through `libc` | the same calls through `libc` on Unix, `spawn_as` through a `pre_exec` step of `std::process::Command`; accounts and `spawn_as` absent on Windows, priority classes there |
 | C host tables | `host-system` | `host-notifications` | `host-processes` | `host-terminal` | `host-accounts` (every callback may be NULL), `host-priority`, `host-spawn-as` |
 | Bare-metal example | machine name, uptime, image path | absent | absent | absent | absent |

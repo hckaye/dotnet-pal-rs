@@ -1,4 +1,4 @@
-"""native/system_native_abi.h must equal the pinned System.Native headers.
+"""crates/dotnet-pal-build/native/system_native_abi.h must equal the pinned System.Native headers.
 
 Runs when a dotnet/runtime checkout is available (DOTNET_PAL_RUNTIME_SOURCE or
 artifacts/runtime-source); otherwise the comparison is skipped, never faked.
@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-HEADER = ROOT / 'native/system_native_abi.h'
+HEADER = ROOT / 'crates/dotnet-pal-build/native/system_native_abi.h'
 
 
 def runtime_root():

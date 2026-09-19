@@ -1,22 +1,34 @@
 # dotnet-pal-rs
 
-A **Rust `no_std` OS-service boundary for .NET NativeAOT ports**. The core crate
-declares one trait per OS service the runtime needs, validates every call that
-crosses the C ABI, and ships the pure pieces every port reuses. A platform port
-is a crate that implements the traits it can honestly provide and exports the
-single entry point `dotnet_pal_get_api(2)`. Absent services are reported as
-clear capability bits and NULL callbacks, never as stubs that return success.
+A **platform-independent Rust `no_std` contract and C ABI for .NET NativeAOT ports**.
+The core declares service traits, validates calls and negotiates capabilities.
+It contains **no Linux, Windows, macOS, host or WASI implementation**, no backend
+features, no external dependencies, and no default allocator or panic handler.
+A missing service is a clear capability bit and a NULL callback, not a success stub.
 
-| Crate | Content |
+## Choose only the packages you need
+
+| Package | Responsibility |
 | --- | --- |
-| `dotnet-pal-rs` (this crate) | Traits (`port`), C ABI, front ends, pure storage providers, optional built-in Linux/host/WASI providers |
-| `crates/dotnet-pal-std` | A complete desktop port on the Rust standard library (Linux, macOS; Windows compiles) |
-| `crates/dotnet-pal-memfs` | An in-memory file system (`no_std` plus `alloc`) for ports without storage hardware |
-| `crates/dotnet-pal-build` | `build.rs` helper that compiles the native NativeAOT adapters and writes MSBuild link inputs |
-| `examples/browser-port` | A port whose services are JavaScript imports, and a C# program running in a browser through it |
+| `dotnet-pal-rs` | Pure traits, C ABI/header, checked front ends and negotiation |
+| `dotnet-pal-build` | Optional **build dependency** with packaged .NET C/C++ bridge sources; no runtime port |
+| `dotnet-pal-linux` | Linux `no_std` reference port, backed by libc |
+| `dotnet-pal-linux-std` / `dotnet-pal-macos` / `dotnet-pal-windows` | Separate desktop implementations for each OS |
+| `dotnet-pal-std` | Compatibility facade selecting only the target OS implementation |
+| `dotnet-pal-host` | Explicitly enabled foreign host-table providers |
+| `dotnet-pal-wasip1` / `dotnet-pal-wasm` | WASI Preview 1 services / Wasm memory growth |
+| `dotnet-pal-storage` / `dotnet-pal-memfs` | Opt-in portable storage / in-memory file system |
+| `dotnet-pal-posix` | Opt-in C POSIX reference helpers; not in the default bridge dependency graph |
 
-See [porting](docs/porting.md) for the library workflow. The rest of this file
-describes the qualification of the built-in configurations.
+The core never depends on a provider. Providers depend on the core, not on each
+other. The workspace's default member is the core; cloning this development
+repository is not the same as including all its packages in an application.
+See [crate boundaries and migration](docs/crate-boundaries.md) and
+[writing a port](docs/porting.md).
+
+`tools/dotnet-pal-standalone` is an **unpublished qualification fixture**, not a
+consumer facade. Historical feature combinations and test archives live there,
+not in the core. The browser and bare-metal examples remain independent ports.
 
 **Implemented and exercised:** native GC memory, clocks, scheduling, events,
 recursive locks, background/finalizer thread creation, termination TLS, stack
@@ -36,41 +48,47 @@ native runtime without linker wrapping; the C-to-Rust boundary executed inside a
 real headless browser; and a C# program whose GC storage and runtime clock reach
 a web page through the boundary.
 
-**Not complete:** this is not a production-supported port. The BCL native layer
-does not carry processes, users, terminal control, advisory file locks, links,
-permission and timestamp changes, memory-mapped files, Unix domain sockets or
-multicast; those report honest failures rather than working. The runtime uses a
-port's fault reporting on ARM64 only, and a port with neither signals nor fault
-reporting still ends the run on a hardware fault. Targets are the CPU
-architectures ILCompiler generates code for. See
-[readiness](docs/readiness.md) for exact completed and uncompleted work. Rust
-target compilation by itself does not establish that NativeAOT can generate or
-execute code for that target.
+**Scope:** these are experimental runtime ports, not a production support
+commitment. Native compilation alone does not demonstrate managed execution;
+use the CI evidence for the exact revision and the supported profile. See
+[readiness](docs/readiness.md) for functional and platform limits.
 
 ## Using the library
 
+A custom port needs only the core. Add storage, an existing platform implementation,
+or the native bridge explicitly. Path dependencies below use this repository;
+the package split does not imply a crates.io release.
+
 ```toml
 [dependencies]
-dotnet-pal-rs = { path = "dotnet-pal-rs", default-features = false, features = ["storage-arena"] }
+dotnet-pal-rs = { path = "dotnet-pal-rs" }
+# Optional: omit this dependency when supplying your own storage.
+dotnet-pal-storage = { path = "dotnet-pal-rs/crates/dotnet-pal-storage", features = ["storage-arena"] }
+
 [build-dependencies]
+# Optional: omit when a separate native build owns the .NET bridge.
 dotnet-pal-build = { path = "dotnet-pal-rs/crates/dotnet-pal-build" }
 ```
 
 ```rust
 #![no_std]
-use dotnet_pal_rs::port::{self, Error, Result};
-struct MyPlatform;
-impl port::Clock for MyPlatform { fn monotonic_ns() -> Result<u64> { Err(Error::Unsupported) } }
-dotnet_pal_rs::define_pal! { Linear = dotnet_pal_rs::storage::Arena, Clock = MyPlatform }
+// A bounded-storage-only example, not a complete NativeAOT runtime port.
+dotnet_pal_rs::define_pal! { Linear = dotnet_pal_storage::Arena }
 dotnet_pal_rs::define_panic_handler!(dotnet_pal_rs::port::Trap);
 ```
 
-`cargo test -p dotnet-pal-std` runs the desktop port against the negotiated C
-table on the current machine. The built-in standalone configurations below are
-selected with Cargo features and built with an explicit crate type:
+To reuse Linux directly, depend on `dotnet-pal-linux` and compose `Linux` traits,
+or opt into its `entry` feature for a complete Linux table. The default feature
+set exports no global C entry point or panic handler. Do not enable multiple
+entry-point providers in one image.
 
 ```sh
-cargo rustc --lib --crate-type staticlib --release --features linux
+# A direct Linux port archive; no host/WASI/desktop implementation is built.
+cargo rustc -p dotnet-pal-linux --lib --crate-type staticlib --release --features entry
+# Existing desktop contract tests run through the compatibility facade.
+cargo test -p dotnet-pal-std
+# Repository-only historical qualification profiles:
+cargo rustc -p dotnet-pal-standalone --lib --crate-type staticlib --release --features linux
 ```
 
 ## Start with Wasm and freestanding validation
@@ -105,7 +123,7 @@ bash scripts/wasi-clock.sh
 bash examples/browser-port/run.sh   # needs a Chromium-based browser; see docs/wasm.md
 
 rustup target add thumbv7em-none-eabi
-cargo rustc --lib --crate-type staticlib --release --no-default-features --features host-kernel \
+cargo rustc -p dotnet-pal-standalone --lib --crate-type staticlib --release --no-default-features --features host-kernel \
   --target thumbv7em-none-eabi
 ```
 

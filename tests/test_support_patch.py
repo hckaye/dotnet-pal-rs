@@ -46,7 +46,7 @@ class SupportPatchTests(unittest.TestCase):
         with self.assertRaises(ValueError):patch.cursor(text.replace('free(_buffer);',''))
 
     def test_signal_diagnostic_does_not_negotiate(self):
-        text=(ROOT/'native/support_adapter.h').read_text()
+        text=(ROOT/'crates/dotnet-pal-build/native/support_adapter.h').read_text()
         body=text.split('inline void fatal_message(',1)[1].split('inline uint64_t filetime()',1)[0]
         self.assertNotIn('dotnet_pal_get_api(',body)
         self.assertNotIn('initialize()',body)
@@ -55,7 +55,8 @@ class SupportPatchTests(unittest.TestCase):
     def test_capability_is_optional_and_append_only(self):
         text=(ROOT/'include/dotnet_pal.h').read_text()
         self.assertIn('dotnet_pal_context_ops context;\n    dotnet_pal_support_ops support;',text)
-        self.assertIn('host-support = ["host"]',(ROOT/'Cargo.toml').read_text())
+        self.assertIn('"dotnet-pal-host/host-support"', (ROOT/'tools/dotnet-pal-standalone/Cargo.toml').read_text())
+        self.assertNotIn('host-support', (ROOT/'Cargo.toml').read_text())
         text=(ROOT/'src/lib.rs').read_text()
         # The support group is negotiated like every other group of the port.
         self.assertIn('support::negotiate::<P>()',text)

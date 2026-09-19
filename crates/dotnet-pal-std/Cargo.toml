@@ -3,25 +3,26 @@ name = "dotnet-pal-std"
 version = "0.7.0"
 edition = "2021"
 rust-version = "1.98"
-description = "dotnet-pal-rs port implemented with the Rust standard library for desktop hosts (Linux, macOS, Windows)"
+description = "Compatibility facade selecting only the current OS PAL crate"
 license = "MIT"
+repository = "https://github.com/hckaye/dotnet-pal-rs"
+include = ["src/**", "Cargo.toml", "README.md", "LICENSE"]
 
 [lib]
 crate-type = ["staticlib", "rlib"]
 
 [features]
 default = []
-# Export `dotnet_pal_get_api` from this crate (the ready-made desktop port).
-# Leave it off to reuse the providers inside another port.
-entry = []
+entry = ["dotnet-pal-linux-std/entry", "dotnet-pal-macos/entry", "dotnet-pal-windows/entry"]
 
-[dependencies]
-dotnet-pal-rs = { path = "../..", default-features = false }
-getrandom = "0.3"
-socket2 = "0.5"
+[target.'cfg(target_os = "linux")'.dependencies]
+dotnet-pal-linux-std = { version = "0.7.0", path = "../dotnet-pal-linux-std" }
+[target.'cfg(target_os = "macos")'.dependencies]
+dotnet-pal-macos = { version = "0.7.0", path = "../dotnet-pal-macos" }
+[target.'cfg(target_os = "windows")'.dependencies]
+dotnet-pal-windows = { version = "0.7.0", path = "../dotnet-pal-windows" }
 
-[target.'cfg(unix)'.dependencies]
+[dev-dependencies]
+dotnet-pal-rs = { path = "../.." }
+[target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.60", features = ["Win32_System_Memory", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_Foundation", "Win32_Networking_WinSock", "Win32_System_Console"] }

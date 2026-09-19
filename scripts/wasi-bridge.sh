@@ -4,10 +4,10 @@ cd "$(dirname "$0")/.."
 python3 integration/wasi/generate.py --check
 node --test tests/wasi_host.test.mjs
 mkdir -p artifacts/wasi-bridge
-cargo rustc --lib --crate-type staticlib --release --no-default-features --features wasi-dispatch --target wasm32-wasip1 --target-dir target/wasi-dispatch
+cargo rustc -p dotnet-pal-standalone --lib --crate-type staticlib --release --no-default-features --features wasi-dispatch --target wasm32-wasip1 --target-dir target/wasi-dispatch
 cc="${CLANG:-clang}"
-args=(--target=wasm32-unknown-unknown -std=c11 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror -Iinclude -Inative -nostdlib
-      tests/wasi_bridge.c native/wasi_bridge.c target/wasi-dispatch/wasm32-wasip1/release/libdotnet_pal_rs.a
+args=(--target=wasm32-unknown-unknown -std=c11 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror -Iinclude -Icrates/dotnet-pal-build/native -nostdlib
+      tests/wasi_bridge.c crates/dotnet-pal-build/native/wasi_bridge.c target/wasi-dispatch/wasm32-wasip1/release/libdotnet_pal_standalone.a
       -Wl,--no-entry -Wl,--fatal-warnings -Wl,--export=pal_bridge_test -Wl,--export-memory)
 "$cc" "${args[@]}" tests/freestanding_memory.c -o artifacts/wasi-bridge/transport.wasm
 timeout 60s node tests/wasi_bridge.mjs artifacts/wasi-bridge/transport.wasm

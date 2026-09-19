@@ -105,7 +105,7 @@ if(DOTNET_PAL_ROOT)
   endif()
   add_definitions(-DDOTNET_PAL_GC_VM=1 -DDOTNET_PAL_KERNEL=1 -DDOTNET_PAL_RUNTIME=1 -DDOTNET_PAL_NATIVE_CONTEXT=1 -DDOTNET_PAL_SUPPORT=1
                   -DDOTNET_PAL_TOPOLOGY=1 -DDOTNET_PAL_PROCESS=1 -DDOTNET_PAL_IMAGE=1 -DDOTNET_PAL_MINIPAL=1)
-  include_directories("${DOTNET_PAL_ROOT}/include" "${DOTNET_PAL_ROOT}/native")
+  include_directories("${DOTNET_PAL_ROOT}/include" "${DOTNET_PAL_ROOT}/crates/dotnet-pal-build/native")
 endif()
 
 ''' + cmake

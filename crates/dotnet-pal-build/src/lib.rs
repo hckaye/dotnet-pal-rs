@@ -35,8 +35,8 @@ pub enum Target {
     Wasm32Freestanding,
 }
 
-/// Native adapter sources shipped with `dotnet-pal-rs` (`native/` and
-/// `integration/`). Each one is a small, audited C or C++ file.
+/// Native adapter sources shipped in this build-only package. Reference
+/// POSIX providers live in the separately enabled `dotnet-pal-posix` package.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Adapter {
     /// `--wrap` definitions routing the LLVM Wasm GC's virtual-memory and clock
@@ -89,13 +89,14 @@ pub const LLVM_GC_WRAP_SYMBOLS: [&str; 9] = [
     "_ZN15GCToOSInterface24GetLowPrecisionTimeStampEv",
 ];
 
-/// Where the shipped sources live: the `dotnet-pal-rs` checkout this crate is part of.
+/// Where this build-only package ships its native adapter sources.
+/// DOTNET_PAL_SOURCE_ROOT may select another directory with the same asset layout.
 pub fn source_root() -> PathBuf {
     if let Some(root) = env::var_os("DOTNET_PAL_SOURCE_ROOT") { return PathBuf::from(root); }
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().expect("dotnet-pal-rs source root")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 /// Directory containing `dotnet_pal.h`.
-pub fn include_dir() -> PathBuf { source_root().join("include") }
+pub fn include_dir() -> PathBuf { PathBuf::from(dotnet_pal_rs::C_INCLUDE_DIR) }
 
 /// Outputs of a successful [`Build::compile`].
 #[derive(Debug)]
@@ -145,7 +146,7 @@ impl Build {
         let mut c = cc::Build::new();
         let mut cxx = cc::Build::new();
         for build in [&mut c, &mut cxx] {
-            build.include(root.join("include")).include(root.join("native")).warnings(true).extra_warnings(true)
+            build.include(include_dir()).include(root.join("native")).warnings(true).extra_warnings(true)
                 .flag_if_supported("-Werror").flag_if_supported("-ffunction-sections").flag_if_supported("-fdata-sections").opt_level(2);
             for dir in &self.includes { build.include(dir); }
             for (name, value) in &self.defines { build.define(name, value.as_deref()); }
@@ -156,11 +157,19 @@ impl Build {
         // The pure errno formatter needs the P2 sysroot's netdb.h constants (the
         // P1 sysroot has none); it performs no OS calls and links into a P1 module.
         let mut p2 = cc::Build::new();
-        p2.include(root.join("include")).warnings(true).extra_warnings(true).flag_if_supported("-Werror")
+        p2.include(include_dir()).warnings(true).extra_warnings(true).flag_if_supported("-Werror")
             .flag_if_supported("-std=c11").opt_level(2).target("wasm32-wasip2");
         let (mut have_c, mut have_cxx, mut have_p2) = (false, false, false);
         for adapter in &self.adapters {
-            let source = root.join(adapter.source());
+            let source = match adapter {
+                Adapter::LinearHeapPosix | Adapter::SupportPosix => {
+                    #[cfg(feature = "posix")]
+                    { PathBuf::from(dotnet_pal_posix::SOURCE_DIR).join(Path::new(adapter.source()).file_name().unwrap()) }
+                    #[cfg(not(feature = "posix"))]
+                    { return Err(io::Error::other("POSIX providers require dotnet-pal-build's explicit posix feature")); }
+                }
+                _ => root.join(adapter.source()),
+            };
             println!("cargo:rerun-if-changed={}", source.display());
             match adapter {
                 Adapter::LlvmGcLinear { observer_only } => {
@@ -172,7 +181,7 @@ impl Build {
             }
             objects.push(out.join(source.file_name().unwrap()).with_extension("o"));
         }
-        println!("cargo:rerun-if-changed={}", root.join("include/dotnet_pal.h").display());
+        println!("cargo:rerun-if-changed={}", include_dir().join("dotnet_pal.h").display());
         println!("cargo:rerun-if-env-changed=DOTNET_PAL_SOURCE_ROOT");
         // Several compiler invocations, one archive: compile separately, then merge objects.
         let mut compiled = Vec::new();
@@ -186,7 +195,7 @@ impl Build {
         if !status.success() { return Err(io::Error::other("archiver failed")); }
         println!("cargo:rustc-link-search=native={}", out.display());
         println!("cargo:rustc-link-lib=static={}", self.name);
-        println!("cargo:include={}", root.join("include").display());
+        println!("cargo:include={}", include_dir().display());
         let mut linker_args = Vec::new();
         if self.adapters.iter().any(|a| matches!(a, Adapter::LlvmGcLinear { observer_only: false })) {
             linker_args.extend(LLVM_GC_WRAP_SYMBOLS.iter().map(|s| format!("-Wl,--wrap={s}")));

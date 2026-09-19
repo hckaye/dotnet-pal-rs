@@ -24,7 +24,11 @@ const _: () = assert!(mem::size_of::<Request>() == 88);
 static COUNTERS: [Counter;OP_COUNT] = [const { Counter::new() }; OP_COUNT];
 static REJECTED: Counter = Counter::new();
 static ERRORS: Counter = Counter::new();
-unsafe extern "C" fn invoke<T: WasiTransport>(opcode: u32, args: *const u64, argc: u32) -> u32 {
+/// Invoke the checked transport from a provider without negotiating a second table.
+/// # Safety
+/// `args` must borrow `argc` readable, aligned u64 values for this call. Pointer
+/// arguments encoded in those values must satisfy the selected operation's contract.
+pub unsafe extern "C" fn invoke<T: WasiTransport>(opcode: u32, args: *const u64, argc: u32) -> u32 {
     if opcode as usize >= OP_COUNT || argc as usize != ARG_COUNTS[opcode as usize]
         || (argc != 0 && (!aligned_output(args.cast_mut()) || (args as usize).checked_add(argc as usize*8).is_none())) {
         REJECTED.increment(); return 28; // __WASI_ERRNO_INVAL

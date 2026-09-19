@@ -1,35 +1,16 @@
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
-//! Versioned, allocation-free OS-service boundary for NativeAOT ports.
+//! Platform-independent PAL contracts, C ABI, validation and negotiation.
 //!
-//! The crate has three layers:
-//!
-//! * [`port`]: the traits a platform implements, one per capability, plus
-//!   [`define_pal!`] which exports `dotnet_pal_get_api` for a port.
-//! * The front ends in this file and the group modules ([`services`], [`kernel`],
-//!   [`runtime`], [`support`], [`context`], [`wasi`], [`topology`], [`process`],
-//!   [`image`], [`streams`], [`files`], [`sockets`], [`faults`], [`system`],
-//!   [`notifications`], [`processes`], [`terminal`]): argument validation,
-//!   output sanitizing and diagnostic counters around any provider.
-//! * Reusable providers that depend on no OS: the bounded [`storage::Arena`],
-//!   the demand [`storage::Ledger`], the Wasm [`storage::Grow`] provider, and the
-//!   raw WASIp1 transport.
-//!
-//! The optional `linux`, `host*`, `linear*` and `wasi*` features assemble a
-//! standalone static library from built-in providers and export the entry point
-//! themselves. A library consumer enables none of them and declares its own port.
-//! Raw-pointer validity, ownership and synchronization remain unsafe caller contracts.
-
-#[cfg(all(feature = "linux", any(feature = "host", feature = "linear")))]
-compile_error!("select exactly one memory backend: linux, host or linear");
-#[cfg(all(feature = "linux", not(target_os = "linux")))]
-compile_error!("the linux backend supports Linux only; use host, linear or a custom port");
+//! This crate has no OS dependencies, provider implementations or backend
+//! features. Select a separate platform crate or implement `port` traits and
+//! export an entry point with `define_pal!`. Allocation, panic policy and OS
+//! ownership remain the final application's responsibilities.
 #[cfg(not(target_has_atomic = "ptr"))]
-compile_error!("this implementation requires pointer-width atomics (not 64-bit atomics)");
-#[cfg(all(feature = "wasi-clock", not(all(feature = "linear", target_arch = "wasm32", target_os = "wasi", target_env = "p1"))))]
-compile_error!("wasi-clock requires the linear backend on wasm32-wasip1");
-#[cfg(all(feature = "storage-grow", not(target_arch = "wasm32")))]
-compile_error!("storage-grow is a wasm32 memory.grow provider");
+compile_error!("the PAL requires pointer-width atomics");
+
+/// C contract headers shipped with this package, for native bridge build tools.
+pub const C_INCLUDE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/include");
 
 use core::{cell::UnsafeCell, ffi::c_void, mem, ptr, sync::atomic::{AtomicU8, Ordering}};
 mod counter;
@@ -64,43 +45,6 @@ pub mod accounts;
 pub mod priority;
 pub mod packets;
 pub mod spawn_as;
-pub mod storage;
-#[cfg(feature = "linux")]
-pub mod linux;
-#[cfg(feature = "linux")]
-mod linux_platform;
-#[cfg(feature = "linux")]
-mod linux_files;
-#[cfg(feature = "linux")]
-mod linux_sockets;
-#[cfg(feature = "linux")]
-mod linux_processes;
-#[cfg(feature = "linux")]
-mod linux_terminal;
-#[cfg(feature = "linux")]
-mod linux_notifications;
-#[cfg(feature = "linux")]
-mod linux_system;
-#[cfg(feature = "linux")]
-mod linux_watches;
-#[cfg(feature = "linux")]
-mod linux_mappings;
-#[cfg(feature = "linux")]
-mod linux_volumes;
-#[cfg(feature = "linux")]
-mod linux_network;
-#[cfg(feature = "linux")]
-mod linux_local_sockets;
-#[cfg(feature = "linux")]
-mod linux_accounts;
-#[cfg(feature = "linux")]
-mod linux_priority;
-#[cfg(feature = "linux")]
-mod linux_packets;
-#[cfg(feature = "host")]
-pub mod host;
-#[cfg(any(feature = "wasi-clock", feature = "wasi-runtime", feature = "wasi-dispatch"))]
-pub mod wasi_p1;
 use port::{LinearStorage, Port, VirtualMemory};
 
 pub const ABI_VERSION: u32 = 2;
@@ -447,8 +391,6 @@ pub fn negotiate<P: Port>(slot: &'static Slot, version: u32) -> *const Api {
     }
 }
 
-#[cfg(any(feature = "linux", feature = "host", feature = "linear"))]
-mod standalone;
 
 #[cfg(test)]
 mod tests {

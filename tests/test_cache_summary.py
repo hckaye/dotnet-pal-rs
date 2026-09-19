@@ -113,7 +113,7 @@ class CacheSummaryTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_no_std_linux_summary(self):
-        self.check_provider('src/linux_platform.rs', desktop=False)
+        self.check_provider('crates/dotnet-pal-linux/src/linux_platform.rs', desktop=False)
 
     def test_std_linux_summary(self):
-        self.check_provider('crates/dotnet-pal-std/src/system.rs', desktop=True)
+        self.check_provider('crates/dotnet-pal-linux-std/src/system.rs', desktop=True)

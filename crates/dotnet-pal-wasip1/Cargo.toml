@@ -1,0 +1,15 @@
+[package]
+name = "dotnet-pal-wasip1"
+version = "0.7.0"
+edition = "2021"
+rust-version = "1.98"
+description = "WASI Preview 1 clock, environment, entropy and dispatch providers"
+license = "MIT"
+repository = "https://github.com/hckaye/dotnet-pal-rs"
+include = ["src/**", "Cargo.toml", "README.md", "LICENSE", "native/**"]
+
+[features]
+default = []
+wasi-dispatch = []
+[dependencies]
+dotnet-pal-rs = { version = "0.7.0", path = "../..", default-features = false }

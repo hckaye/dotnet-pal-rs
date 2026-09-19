@@ -22,7 +22,7 @@ rm -rf "$framework"; mkdir -p "$framework"
 cp -as "$native_dir/." "$framework/"
 rm "$framework/libSystem.Native.a"
 cp artifacts/system-native/libSystem.Native.a "$framework/libSystem.Native.a"
-cargo rustc --lib --crate-type staticlib --release --features linux
+cargo rustc -p dotnet-pal-standalone --lib --crate-type staticlib --release --features linux
 rm -rf samples/FacilitiesProbe/obj samples/FacilitiesProbe/bin
 dotnet publish samples/FacilitiesProbe/FacilitiesProbe.csproj -c Release -r "$rid" "-p:ProbeExpect=${expect//;/%3B}" \
   "-p:IlcSdkPath=$overlay/" "-p:IlcFrameworkNativePath=$framework/" \
@@ -62,6 +62,6 @@ for needed in [name for group in os.environ['PROBE_GROUPS'].split(';') if group 
     if needed not in providers: raise SystemExit(needed + ' is not in the image: the probe no longer reaches it')
 PY
 python3 scripts/audit_dependencies.py --runtime "$overlay/libRuntime.WorkstationGC.a" --runtime "$overlay/libaotminipal.a" \
-  --runtime artifacts/system-native/libSystem.Native.a --pal target/release/libdotnet_pal_rs.a \
+  --runtime artifacts/system-native/libSystem.Native.a --pal target/release/libdotnet_pal_standalone.a \
   --binary artifacts/facilities-probe/FacilitiesProbe --output artifacts/facilities-probe/dependency-inventory.log --require-isolated
 echo "FACILITIES PROBE PASS rid=$rid expect='$expect': change watching, mapped files, volumes and network information of the BCL reach the OS only through the boundary"

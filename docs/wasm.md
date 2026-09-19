@@ -28,7 +28,7 @@ The bits that matter for Wasm are:
 | `CAP_ENVIRONMENT`, `CAP_REALTIME`, `CAP_ENTROPY` | Environment snapshot, Unix wall clock in nanoseconds, cryptographic random bytes. |
 | `CAP_DIAGNOSTICS` (4194304) | `write_stderr` reaches a host sink. |
 
-The native GC adapter in `native/gc_vm_adapter.h` requires `CAP_VM` and returns
+The native GC adapter in `crates/dotnet-pal-build/native/gc_vm_adapter.h` requires `CAP_VM` and returns
 NULL for a linear-only table; `tests/adapter.cpp` checks that rejection. The
 explicit linear GC adapter requires `CAP_LINEAR` and rejects a table that also
 claims `CAP_VM`. Checking only the ABI version is not enough on any profile.
@@ -91,7 +91,7 @@ before any side effect. This provider assumes that nothing else grows the same
 memory.
 
 The `heap` feature uses `storage::Ledger<storage::Hooks>` with the hooks
-implemented by `native/linear_heap_posix.c` over wasi-libc's allocator, and a
+implemented by `crates/dotnet-pal-posix/native/linear_heap_posix.c` over wasi-libc's allocator, and a
 64 MiB budget. This is the variant linked with the NativeAOT LLVM runtime, whose
 libc and BCL already own that allocator.
 

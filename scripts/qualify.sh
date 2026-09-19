@@ -22,13 +22,13 @@ for profile in workstation server; do
   export DOTNET_GCServer="$gc" DOTNET_gcServer="$gc" COMPlus_gcServer="$gc"
   for backend in baseline linux host fault; do
     output="$root/artifacts/qualification/$profile-$backend"
-    args=("-p:PalLib=$root/target/release/libdotnet_pal_rs.a"
+    args=("-p:PalLib=$root/target/release/libdotnet_pal_standalone.a"
           "-p:PalQualificationObject=$root/artifacts/qualification_native.o")
     if [[ "$backend" != baseline ]]; then
       args+=("-p:IlcSdkPath=$overlay/" "-p:PalSourceManifest=$manifest")
     fi
     if [[ "$backend" == host || "$backend" == fault ]]; then
-      args+=("-p:PalLib=$root/target/host-kernel/release/libdotnet_pal_rs.a")
+      args+=("-p:PalLib=$root/target/host-kernel/release/libdotnet_pal_standalone.a")
       if [[ "$backend" == fault ]]; then
         args+=("-p:PalHostObject=$root/artifacts/host_fault_all.o"
                "-p:PalQualificationObject=$root/artifacts/qualification_fault_native.o")

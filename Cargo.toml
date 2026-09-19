@@ -3,72 +3,24 @@ name = "dotnet-pal-rs"
 version = "0.7.0"
 edition = "2021"
 rust-version = "1.98"
-description = "Experimental no_std OS boundary for NativeAOT portability research"
+description = "Platform-independent no_std NativeAOT PAL contracts and C ABI"
 license = "MIT"
+repository = "https://github.com/hckaye/dotnet-pal-rs"
+include = ["src/**", "include/**", "Cargo.toml", "README.md", "LICENSE"]
 
 [workspace]
-members = ["crates/*", "examples/browser-port"]
-default-members = [".", "crates/*"]
+members = ["crates/*", "examples/browser-port", "tools/dotnet-pal-standalone"]
+# A plain cargo build/test operates on the core, not every platform.
+default-members = ["."]
 resolver = "2"
 
 [lib]
 crate-type = ["rlib"]
 
 [features]
-# No backend by default: a library consumer declares its own port with
-# `define_pal!`. The features below assemble standalone static libraries.
 default = []
-linux = ["dep:libc"]
-# Virtual memory from an immutable C host table (dotnet_pal_host_v2).
-host = []
-# Additional C host tables. Each requires its provider symbol before startup.
-host-services = ["host"]
-host-kernel = ["host-services"]
-host-runtime = ["host-kernel"]
-host-context = ["host-runtime"]
-host-support = ["host"]
-host-topology = ["host"]
-host-process = ["host"]
-host-image = ["host"]
-host-streams = ["host"]
-host-files = ["host"]
-host-sockets = ["host"]
-host-faults = ["host"]
-host-system = ["host"]
-host-notifications = ["host"]
-host-processes = ["host"]
-host-terminal = ["host"]
-host-watches = ["host"]
-host-mappings = ["host"]
-host-volumes = ["host"]
-host-network = ["host"]
-host-local-sockets = ["host"]
-host-accounts = ["host"]
-host-priority = ["host"]
-host-packets = ["host"]
-host-spawn-as = ["host"]
-# OS-independent storage providers usable by any port.
-storage-arena = []
-storage-hooks = []
-storage-grow = []
-# Standalone linear-storage libraries: the bounded static arena, the embedder
-# hooks (sharing the C heap on WASI), or wasm32 memory.grow for modules with no
-# other allocator.
-linear = ["storage-arena"]
-linear-heap = ["linear", "storage-hooks"]
-linear-grow = ["linear", "storage-grow"]
-# Storage budget selection for managed experiments; the default stays 8 MiB.
-# These only change the capacity constant and select no backend by themselves.
-linear-gc = []
-# 64 MiB budget for managed OOM qualification; not GCHeapHardLimit (64-bit only).
-linear-gc-small = ["linear-gc"]
-# WASI Preview 1 providers on wasm32-wasip1.
-wasi-clock = ["linear"]
-wasi-runtime = ["wasi-clock"]
-wasi-dispatch = ["wasi-runtime"]
 
 [dependencies]
-libc = { version = "=0.2.169", default-features = false, optional = true }
 
 [profile.dev]
 panic = "abort"

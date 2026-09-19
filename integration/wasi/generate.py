@@ -31,7 +31,7 @@ def outputs():
         c.append('}')
         rs.append(f'pub const {op["name"].upper()}: u32 = {op["opcode"]};')
     header='#ifndef DOTNET_PAL_WASI_SCHEMA_H\n#define DOTNET_PAL_WASI_SCHEMA_H\n' + ''.join(f'#define DOTNET_PAL_WASI_{o["name"].upper()} {o["opcode"]}u\n' for o in operations) + '#endif\n'
-    return {'native/wasi_schema.h':header, 'native/wasi_bridge.c':'\n'.join(c)+'\n','src/wasi_schema.rs':'\n'.join(rs)+'\n'}
+    return {'crates/dotnet-pal-build/native/wasi_schema.h':header, 'crates/dotnet-pal-build/native/wasi_bridge.c':'\n'.join(c)+'\n','src/wasi_schema.rs':'\n'.join(rs)+'\n'}
 def main():
     parser=argparse.ArgumentParser(); parser.add_argument('--check',action='store_true'); args=parser.parse_args()
     for path,text in outputs().items():

@@ -1,0 +1,40 @@
+[package]
+name = "dotnet-pal-host"
+version = "0.7.0"
+edition = "2021"
+rust-version = "1.98"
+description = "Validated C host-table providers for custom hosts"
+license = "MIT"
+repository = "https://github.com/hckaye/dotnet-pal-rs"
+include = ["src/**", "Cargo.toml", "README.md", "LICENSE", "native/**"]
+
+[features]
+default = []
+host = []
+host-services = []
+host-kernel = ["host-services"]
+host-runtime = ["host-kernel"]
+host-context = ["host-runtime"]
+host-support = []
+host-topology = []
+host-process = []
+host-image = []
+host-streams = []
+host-files = []
+host-sockets = []
+host-faults = []
+host-system = []
+host-notifications = []
+host-processes = []
+host-terminal = []
+host-watches = []
+host-mappings = []
+host-volumes = []
+host-network = []
+host-local-sockets = []
+host-accounts = []
+host-priority = []
+host-packets = []
+host-spawn-as = []
+[dependencies]
+dotnet-pal-rs = { version = "0.7.0", path = "../..", default-features = false }

@@ -5,6 +5,14 @@ edition = "2021"
 rust-version = "1.98"
 description = "build.rs helper that assembles the NativeAOT adapter objects and MSBuild link inputs for a dotnet-pal-rs port"
 license = "MIT"
+repository = "https://github.com/hckaye/dotnet-pal-rs"
+include = ["src/**", "native/**", "integration/**", "Cargo.toml", "README.md", "LICENSE"]
+
+[features]
+default = []
+posix = ["dep:dotnet-pal-posix"]
 
 [dependencies]
+dotnet-pal-rs = { version = "0.7.0", path = "../..", default-features = false }
+dotnet-pal-posix = { version = "0.7.0", path = "../dotnet-pal-posix", optional = true }
 cc = "1"

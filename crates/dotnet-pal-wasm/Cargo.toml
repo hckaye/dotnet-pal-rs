@@ -1,0 +1,14 @@
+[package]
+name = "dotnet-pal-wasm"
+version = "0.7.0"
+edition = "2021"
+rust-version = "1.98"
+description = "Single-owner wasm32 memory.grow storage provider"
+license = "MIT"
+repository = "https://github.com/hckaye/dotnet-pal-rs"
+include = ["src/**", "Cargo.toml", "README.md", "LICENSE", "native/**"]
+
+
+[dependencies]
+dotnet-pal-rs = { version = "0.7.0", path = "../..", default-features = false }
+dotnet-pal-storage = { version = "0.7.0", path = "../dotnet-pal-storage" }
