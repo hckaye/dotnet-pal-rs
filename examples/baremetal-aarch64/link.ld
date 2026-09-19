@@ -22,11 +22,17 @@ SECTIONS
         __text_end = .;
     }
 
-    .rodata : ALIGN(16) {
+    /* InitGSCookie temporarily writes __security_cookie in .rodata. Keep
+     * these pages separate from code and mutable loader/runtime data so the
+     * port can restore READ-only access without changing neighbouring objects. */
+    .rodata : ALIGN(4096) {
+        __rodata_start = .;
         *(.rodata .rodata.*)
         *(.srodata .srodata.*)
         /* The NativeAOT exception tables of the managed code. */
         KEEP(*(.dotnet_eh_table))
+        . = ALIGN(4096);
+        __rodata_end = .;
     }
     /* Global offset table of the position-independent runtime and managed objects,
      * resolved statically by the linker. */

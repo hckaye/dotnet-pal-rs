@@ -1,7 +1,9 @@
-//! Updates the 4 KiB RAM descriptors built by boot.S. Only the allocatable
-//! region may be changed: the image, stacks used during boot and page tables
-//! themselves must remain mapped. The port is single-core and these routines
-//! never yield or retain a borrow across a context switch.
+//! Updates the 4 KiB RAM descriptors built by boot.S. Allocator operations
+//! are restricted to the allocatable region. NativeMapping may additionally
+//! toggle the dedicated, page-aligned image .rodata between R and RW for
+//! NativeAOT startup. Code, mutable image data, boot stacks and page tables
+//! cannot be revoked through this image-data path. The port is single-core;
+//! these routines never yield or retain a borrow across a context switch.
 use super::{bounds, zero, PAGE};
 use core::{arch::asm, ptr};
 use dotnet_pal_rs::port::{Error, Result};
@@ -17,6 +19,8 @@ const UXN: u64 = 1 << 54;
 
 extern "C" {
     static mut pal_ram_pages: [u64; RAM_PAGES];
+    static __rodata_start: u8;
+    static __rodata_end: u8;
 }
 
 /// AArch64 at EL1 cannot express write-only or execute-only mappings. Refuse
@@ -33,8 +37,7 @@ pub fn flags(protection: u32) -> Result<u64> {
         | if protection & EXECUTE == 0 { PXN } else { 0 })
 }
 
-fn range(address: usize, size: usize) -> Result<(usize, usize)> {
-    let (low, high) = bounds();
+fn page_range(address: usize, size: usize, (low, high): (usize, usize)) -> Result<(usize, usize)> {
     let end = address.checked_add(size).ok_or(Error::InvalidArgument)?;
     if size == 0 || address % PAGE != 0 || size % PAGE != 0
         || address < low || end > high || low < RAM_START
@@ -60,7 +63,32 @@ unsafe fn publish() {
 /// valid descriptor to another valid descriptor with different permissions.
 pub unsafe fn protect(address: usize, size: usize, protection: u32) -> Result<()> {
     let attributes = flags(protection)?;
-    let (first, end) = range(address, size)?;
+    let pages = match page_range(address, size, bounds()) {
+        Ok(pages) => pages,
+        Err(_) => {
+            // NativeMapping also protects the runtime's image-resident GS
+            // cookie. No-access is deliberately NOT accepted here, so neither
+            // VM decommit nor allocator release can revoke image pages.
+            let pages = page_range(address, size, image_data_bounds())?;
+            if protection != READ && protection != (READ | WRITE) {
+                return Err(Error::Unsupported);
+            }
+            pages
+        }
+    };
+    unsafe { change(pages, attributes, address, size, protection) };
+    Ok(())
+}
+
+/// Only the dedicated read-only image segment is eligible, never the full
+/// image window. The linker puts both ends on page boundaries and excludes
+/// .text, .got, .data, .bss (including page tables), TLS and the boot stack.
+fn image_data_bounds() -> (usize, usize) {
+    (ptr::addr_of!(__rodata_start) as usize, ptr::addr_of!(__rodata_end) as usize)
+}
+
+unsafe fn change((first, end): (usize, usize), attributes: u64,
+                 address: usize, size: usize, protection: u32) {
     for index in first..end {
         unsafe { ptr::write_volatile(entry(index), 0) };
     }
@@ -78,13 +106,12 @@ pub unsafe fn protect(address: usize, size: usize, protection: u32) -> Result<()
             unsafe { sync_instructions(address, size) };
         }
     }
-    Ok(())
 }
 
 /// Commit only previously inaccessible pages. Recommitting an already valid
 /// page must preserve its contents; a decommitted page must read back as zero.
 pub unsafe fn commit(address: usize, size: usize) -> Result<()> {
-    let (mut index, end) = range(address, size)?;
+    let (mut index, end) = page_range(address, size, bounds())?;
     let attributes = flags(READ | WRITE)?;
     while index < end {
         if unsafe { ptr::read_volatile(entry(index)) } & VALID != 0 {
@@ -112,7 +139,7 @@ unsafe fn sync_instructions(address: usize, size: usize) {
     unsafe { asm!("mrs {}, ctr_el0", out(reg) ctr, options(nomem, nostack, preserves_flags)) };
     let data_line = 4usize << ((ctr >> 16) & 15);
     let instruction_line = 4usize << (ctr & 15);
-    let end = address + size; // range() has checked this addition.
+    let end = address + size; // page_range() has checked this addition.
     let mut line = address & !(data_line - 1);
     while line < end {
         unsafe { asm!("dc cvau, {}", in(reg) line, options(nostack, preserves_flags)) };
