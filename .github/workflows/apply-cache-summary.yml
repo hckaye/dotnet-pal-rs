@@ -1,0 +1,61 @@
+name: apply-cache-summary
+on:
+  push:
+    branches: ['fix/validation-and-baremetal-memory']
+    paths: ['.github/workflows/apply-cache-summary.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.repository == 'hckaye/dotnet-pal-rs' && github.actor == 'hckaye'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply exact reviewed cache-summary changes and remove this staging workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          def blob(text):
+              data = text.encode()
+              return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          for name, before, after in [
+              ('src/linux_platform.rs', '2c1fb7987b1b2a28cb19872fcdd80083c3dc329d', '6c27a79390466fedb06723bbd3cee8f153f68114'),
+              ('crates/dotnet-pal-std/src/system.rs', '04d5e825a937c7ed1caa7694c22716adce281e4b', '1870667e3efbde50439cfdf33e801e1e39a1551f')]:
+              p = Path(name)
+              text = p.read_text()
+              assert blob(text) == before, name
+              start = text.index('    fn cache_size() -> Result<usize> {')
+              end = text.index('    fn cache_level_size(', start)
+              if name.startswith('src/'):
+                  replacement = ('    fn cache_size() -> Result<usize> {\n'
+                      '        // Reuse each level\'s sysconf/sysfs fallback. A partial sysconf answer\n'
+                      '        // must not hide deeper caches known only through sysfs.\n'
+                      '        let mut best = 0;\n'
+                      '        for level in 1..=4 { best = best.max(Self::cache_level_size(level)?); }\n'
+                      '        Ok(best)\n'
+                      '    }\n')
+              else:
+                  old = text[start:end]
+                  keep = old.index('        #[cfg(target_os = "macos")]')
+                  replacement = ('    fn cache_size() -> Result<usize> {\n'
+                      '        #[cfg(target_os = "linux")]\n'
+                      '        {\n'
+                      '            // Use the same per-level fallback as cache_level_size, including\n'
+                      '            // when sysconf reports only some of the machine\'s cache levels.\n'
+                      '            let mut best = 0;\n'
+                      '            for level in 1..=4 { best = best.max(Self::cache_level_size(level)?); }\n'
+                      '            Ok(best)\n'
+                      '        }\n') + old[keep:]
+              result = text[:start] + replacement + text[end:]
+              assert blob(result) == after, name
+              p.write_text(result)
+          PY
+          git rm .github/workflows/apply-cache-summary.yml
+          git diff --check
+          git add src/linux_platform.rs crates/dotnet-pal-std/src/system.rs
+          git -c user.name='hckaye' -c user.email='hckaye@users.noreply.github.com' commit -m 'Fix Linux cache summaries using per-level sysconf and sysfs fallback'
+          git push origin HEAD:refs/heads/fix/validation-and-baremetal-memory
