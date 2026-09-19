@@ -2,8 +2,10 @@
  * A handle is the descriptor plus one, readiness is poll(2) and every wake
  * channel is a non-blocking self-pipe. Fault 1 withholds a callback; fault 2
  * answers in the ways the front end is documented to sanitize.
- * pal_sockets_host_descriptor is for the network group's reference provider,
- * whose membership call takes these handles. */
+ * pal_sockets_host_descriptor is for the reference providers of the network and
+ * local_sockets groups, whose calls take these handles. A Unix domain socket is
+ * known by asking the descriptor for its domain: the calls that take an IP
+ * address refuse it, and its endpoints answer with the bare family. */
 #define _GNU_SOURCE
 #include "dotnet_pal.h"
 #include <errno.h>
@@ -56,6 +58,8 @@ static uint32_t status_of(int code) {
     }
 }
 static uint32_t result(int rc) { return rc == 0 ? DOTNET_PAL_OK : status_of(errno); }
+static int own(int fd, int name) { int value = -1; socklen_t length = sizeof value; return getsockopt(fd, SOL_SOCKET, name, &value, &length) == 0 ? value : -1; }
+static int is_local(int fd) { return own(fd, SO_DOMAIN) == AF_UNIX; }
 /* An expired SO_RCVTIMEO or SO_SNDTIMEO is EAGAIN too; on a blocking descriptor that is the timeout. */
 static uint32_t waited(int fd) {
     int code = errno;
@@ -88,18 +92,20 @@ static int from_native(const void *native, socklen_t length, dotnet_pal_socket_a
         memcpy(&v6, native, sizeof v6);
         out->family = DOTNET_PAL_FAMILY_IPV6; out->port = ntohs(v6.sin6_port); out->scope = v6.sin6_scope_id; memcpy(out->address, &v6.sin6_addr, 16); return 1;
     }
+    if (family == AF_UNIX) { out->family = DOTNET_PAL_FAMILY_LOCAL; return 1; } /* the path is the local_sockets group's to report */
     return 0;
 }
 static uint32_t socket_create(uint32_t family, uint32_t kind, void **out) {
     if (pal_sockets_fault == 2) { *out = NULL; return DOTNET_PAL_OK; } /* success without a handle */
-    int fd = socket(family == DOTNET_PAL_FAMILY_IPV6 ? AF_INET6 : AF_INET, (kind == DOTNET_PAL_SOCKET_DATAGRAM ? SOCK_DGRAM : SOCK_STREAM) | SOCK_CLOEXEC, 0);
+    int domain = family == DOTNET_PAL_FAMILY_LOCAL ? AF_UNIX : family == DOTNET_PAL_FAMILY_IPV6 ? AF_INET6 : AF_INET;
+    int fd = socket(domain, (kind == DOTNET_PAL_SOCKET_DATAGRAM ? SOCK_DGRAM : SOCK_STREAM) | SOCK_CLOEXEC, 0);
     if (fd < 0) return status_of(errno);
     *out = fresh(fd); return DOTNET_PAL_OK;
 }
 static uint32_t socket_close(void *socket) { return close(to_fd(socket)) == 0 || errno == EINTR ? DOTNET_PAL_OK : status_of(errno); }
 static uint32_t socket_bind(void *socket, const dotnet_pal_socket_address *address) {
     struct sockaddr_storage native; socklen_t length = to_native(address, &native);
-    return length == 0 ? DOTNET_PAL_INVALID_ARGUMENT : result(bind(to_fd(socket), (struct sockaddr*)&native, length));
+    return length == 0 || is_local(to_fd(socket)) ? DOTNET_PAL_INVALID_ARGUMENT : result(bind(to_fd(socket), (struct sockaddr*)&native, length));
 }
 static uint32_t socket_listen(void *socket, uint32_t backlog) { return result(listen(to_fd(socket), backlog > INT_MAX ? INT_MAX : (int)backlog)); }
 static uint32_t socket_accept(void *socket, void **out, dotnet_pal_socket_address *peer) {
@@ -117,7 +123,7 @@ static uint32_t pending_error(int fd, int *code) {
 }
 static uint32_t socket_connect(void *socket, const dotnet_pal_socket_address *address) {
     struct sockaddr_storage native; socklen_t length = to_native(address, &native); int fd = to_fd(socket), code;
-    if (length == 0) return DOTNET_PAL_INVALID_ARGUMENT;
+    if (length == 0 || is_local(fd)) return DOTNET_PAL_INVALID_ARGUMENT;
     if (connect(fd, (struct sockaddr*)&native, length) == 0) return DOTNET_PAL_OK;
     if (errno != EINTR) return status_of(errno);
     /* The interrupted attempt is still running: its result arrives as writability. */
@@ -129,7 +135,7 @@ static uint32_t socket_connect(void *socket, const dotnet_pal_socket_address *ad
 static uint32_t socket_send(void *socket, const uint8_t *data, size_t size, const dotnet_pal_socket_address *to, size_t *sent) {
     if (pal_sockets_fault == 2) { *sent = size + 1; return DOTNET_PAL_OK; } /* more than was offered */
     struct sockaddr_storage native; socklen_t length = to ? to_native(to, &native) : 0; ssize_t n;
-    if (to && length == 0) return DOTNET_PAL_INVALID_ARGUMENT;
+    if (to && (length == 0 || is_local(to_fd(socket)))) return DOTNET_PAL_INVALID_ARGUMENT;
     do n = to ? sendto(to_fd(socket), data, size, MSG_NOSIGNAL, (struct sockaddr*)&native, length) : send(to_fd(socket), data, size, MSG_NOSIGNAL);
     while (n < 0 && errno == EINTR);
     if (n < 0) return waited(to_fd(socket));
@@ -142,6 +148,9 @@ static uint32_t socket_receive(void *socket, uint8_t *data, size_t capacity, uin
     while (n < 0 && errno == EINTR);
     if (n < 0) return waited(to_fd(socket));
     if (from) from_native(&native, length, from); /* a stream leaves the caller's zero address */
+    /* The kernel names a local sender by whether it has a path, stream or not. A local stream names none, like any stream, and the
+     * sender of a local datagram is a local socket, whatever its name. */
+    if (from && is_local(to_fd(socket))) { memset(from, 0, sizeof *from); if (own(to_fd(socket), SO_TYPE) == SOCK_DGRAM) from->family = DOTNET_PAL_FAMILY_LOCAL; }
     *received = (size_t)n; return DOTNET_PAL_OK;
 }
 static uint32_t socket_shutdown(void *socket, uint32_t how) {
@@ -198,6 +207,7 @@ static uint32_t shape(int fd, uint32_t option, int *v6) {
     length = sizeof domain;
     if (getsockopt(fd, SOL_SOCKET, SO_DOMAIN, &domain, &length) != 0) return status_of(errno);
     *v6 = domain == AF_INET6;
+    if (domain == AF_UNIX) return DOTNET_PAL_UNSUPPORTED; /* neither TCP tuning nor hop limits nor multicast */
     if (keep_alive_option(option) && type != SOCK_STREAM) return DOTNET_PAL_UNSUPPORTED;
     if (option >= DOTNET_PAL_SOCKET_MULTICAST_HOPS && option <= DOTNET_PAL_SOCKET_MULTICAST_INTERFACE && type != SOCK_DGRAM) return DOTNET_PAL_UNSUPPORTED;
     return DOTNET_PAL_OK;

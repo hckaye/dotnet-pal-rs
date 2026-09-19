@@ -137,6 +137,15 @@ impl Port for Standalone {
     #[cfg(feature = "linux")] type Network = Linux;
     #[cfg(feature = "host-network")] type Network = Host;
     #[cfg(not(any(feature = "linux", feature = "host-network")))] type Network = Absent;
+    #[cfg(feature = "linux")] type LocalSockets = Linux;
+    #[cfg(feature = "host-local-sockets")] type LocalSockets = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-local-sockets")))] type LocalSockets = Absent;
+    #[cfg(feature = "linux")] type Accounts = Linux;
+    #[cfg(feature = "host-accounts")] type Accounts = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-accounts")))] type Accounts = Absent;
+    #[cfg(feature = "linux")] type Priority = Linux;
+    #[cfg(feature = "host-priority")] type Priority = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-priority")))] type Priority = Absent;
 
     #[cfg(feature = "linux")] type Abort = Linux;
     #[cfg(all(feature = "host", not(feature = "linux")))] type Abort = Host;

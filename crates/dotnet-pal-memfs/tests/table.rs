@@ -2,20 +2,22 @@
 //! adapter does: the front end validates, the provider answers, statuses come back.
 use dotnet_pal_rs::files::{Stats, Status, CAP, CREATE, EXCLUSIVE, LOCK_EXCLUSIVE, LOCK_SHARED, LOCK_UNLOCK, MAX_ENTRY_NAME, NODE_DIRECTORY, NODE_FILE, NODE_SYMLINK, READ, TIME_KEEP, TRUNCATE, WRITE};
 use dotnet_pal_rs::io::{ACCESS_DENIED, ALREADY_EXISTS, IS_DIRECTORY, NAME_TOO_LONG, NOT_DIRECTORY, NOT_EMPTY, WOULD_BLOCK};
-use dotnet_pal_rs::kernel::BUSY;
-use dotnet_pal_rs::runtime::{BUFFER_TOO_SMALL, NOT_FOUND};
-use dotnet_pal_rs::{INVALID_ARGUMENT, OK};
+use dotnet_pal_rs::kernel::{BUSY, TIMEOUT};
+use dotnet_pal_rs::runtime::{BUFFER_TOO_SMALL, EXECUTE, NOT_FOUND};
+use dotnet_pal_rs::watches::{Event, DELETE, DIRECTORY, FOREVER, MODIFY, MOVED_FROM, MOVED_TO, NO_FOLLOW, ONLY_DIRECTORY, OVERFLOW, REMOVED};
+use dotnet_pal_rs::{mappings, watches, INVALID_ARGUMENT, OK, UNSUPPORTED};
 use std::{ffi::c_void, mem, ptr};
 
-dotnet_pal_rs::declare_port! { struct P; Files = dotnet_pal_memfs::MemFs }
+dotnet_pal_rs::declare_port! { struct P; Files = dotnet_pal_memfs::MemFs, Watches = dotnet_pal_memfs::MemFs, Mappings = dotnet_pal_memfs::MemFs }
 static SLOT: dotnet_pal_rs::Slot = dotnet_pal_rs::Slot::new();
-fn files() -> &'static dotnet_pal_rs::files::Ops {
+fn api() -> &'static dotnet_pal_rs::Api {
     let api = dotnet_pal_rs::negotiate::<P>(&SLOT, dotnet_pal_rs::ABI_VERSION);
     assert!(!api.is_null());
     let api = unsafe { &*api };
-    assert_eq!(api.header.capabilities, CAP, "the port provides files and nothing else");
-    &api.files
+    assert_eq!(api.header.capabilities, CAP | watches::CAP | mappings::CAP, "the port provides files, watches and mappings and nothing else");
+    api
 }
+fn files() -> &'static dotnet_pal_rs::files::Ops { &api().files }
 fn open(path: &str, flags: u32) -> (u32, *mut c_void) {
     let mut file = ptr::null_mut();
     (unsafe { files().open.unwrap()(path.as_ptr(), path.len(), flags, 0o640, &mut file) }, file)
@@ -291,4 +293,173 @@ fn attributes_links_and_locks_go_through_the_table() {
     let after = stats();
     assert_eq!((after.attribute_ok - before.attribute_ok, after.link_ok - before.link_ok, after.lock_ok - before.lock_ok), (6, 6, 10));
     assert!(after.rejected_or_failed - before.rejected_or_failed >= 30);
+}
+
+/// An event as the table hands it over: the watch, the kinds, the cookie and the name.
+type Seen = (u32, u32, u32, String);
+fn blank(event: &Event) -> bool { event.watch == 0 && event.events == 0 && event.cookie == 0 && event.name_length == 0 && event.name.iter().all(|byte| *byte == 0) }
+
+#[test]
+fn watches_go_through_the_table() {
+    let (f, w) = (files(), &api().watches);
+    let stats = || {
+        let mut stats = watches::Stats::default();
+        assert_eq!(unsafe { w.read_stats.unwrap()(&mut stats, mem::size_of::<watches::Stats>()) }, OK);
+        [stats.open_ok, stats.close_ok, stats.add_ok, stats.remove_ok, stats.read_ok, stats.rejected_or_failed]
+    };
+    let before = stats();
+    assert_eq!(mkdir("/watched"), OK);
+    let mut watcher = ptr::null_mut();
+    assert_eq!(unsafe { w.open.unwrap()(&mut watcher) }, OK);
+    assert!(!watcher.is_null());
+    assert_eq!(unsafe { w.open.unwrap()(ptr::null_mut()) }, INVALID_ARGUMENT);
+    let add = |watcher: *mut c_void, path: &str, events: u32| {
+        let mut watch = 99u32;
+        (unsafe { w.add.unwrap()(watcher, path.as_ptr(), path.len(), events, &mut watch) }, watch)
+    };
+    let all = watches::ACCESS | MODIFY | watches::ATTRIBUTES | MOVED_FROM | MOVED_TO | watches::CREATE | DELETE;
+    // The file comes before anything is watched. From the first watch on every change is an event.
+    let (status, file) = open("/watched/f", READ | WRITE | CREATE);
+    assert_eq!(status, OK);
+    // Eight refusals: three by the provider, five by the front end.
+    assert_eq!(add(watcher, "/watched/missing", all), (NOT_FOUND, 0));
+    assert_eq!(add(watcher, "/watched/f", all | ONLY_DIRECTORY), (NOT_DIRECTORY, 0));
+    assert_eq!(add(watcher, &format!("/watched/{}", "n".repeat(MAX_ENTRY_NAME + 1)), all), (NAME_TOO_LONG, 0));
+    assert_eq!(add(watcher, "/watched", 0), (INVALID_ARGUMENT, 0));
+    assert_eq!(add(watcher, "/watched", ONLY_DIRECTORY | NO_FOLLOW), (INVALID_ARGUMENT, 0));
+    assert_eq!(add(watcher, "/watched", all | OVERFLOW), (INVALID_ARGUMENT, 0));
+    assert_eq!(add(ptr::null_mut(), "/watched", all), (INVALID_ARGUMENT, 0));
+    assert_eq!(add(watcher, "/watched", all | ONLY_DIRECTORY), (OK, 1));
+    assert_eq!(add(watcher, "/watched/f", MODIFY | REMOVED | DIRECTORY), (INVALID_ARGUMENT, 0));
+    assert_eq!(add(watcher, "/watched/f", MODIFY | NO_FOLLOW), (OK, 2));
+
+    let read = |watcher: *mut c_void, timeout_ns: u64| -> (u32, Seen) {
+        let mut event = Event { watch: 9, events: 9, cookie: 9, name_length: 9, name: [9; 256] };
+        let status = unsafe { w.read.unwrap()(watcher, timeout_ns, &mut event, mem::size_of::<Event>()) };
+        assert!(if status == OK { event.name[event.name_length as usize..].iter().all(|byte| *byte == 0) } else { blank(&event) });
+        (status, (event.watch, event.events, event.cookie, String::from_utf8(event.name().to_vec()).unwrap()))
+    };
+    let seen = |watch: u32, events: u32, name: &str| (OK, (watch, events, 0, name.to_string()));
+    // No call here changes attributes or links: the test that counts those calls runs beside this one.
+    let mut done = 0usize;
+    assert_eq!(unsafe { f.write_at.unwrap()(file, 0, b"data".as_ptr(), 4, &mut done) }, OK);
+    assert_eq!(unsafe { f.set_size.unwrap()(file, 2) }, OK);
+    assert_eq!(mkdir("/watched/d"), OK);
+    assert_eq!(unsafe { f.rename.unwrap()(b"/watched/f".as_ptr(), 10, b"/watched/g".as_ptr(), 10) }, OK);
+    assert_eq!(unsafe { f.close.unwrap()(file) }, OK);
+    assert_eq!(unsafe { f.remove.unwrap()(b"/watched/g".as_ptr(), 10) }, OK);
+    assert_eq!(read(watcher, 0), seen(1, MODIFY, "f"));
+    assert_eq!(read(watcher, FOREVER), seen(2, MODIFY, ""));
+    assert_eq!(read(watcher, 1_000_000_000), seen(1, MODIFY, "f"));
+    assert_eq!(read(watcher, 0), seen(2, MODIFY, ""));
+    assert_eq!(read(watcher, 0), seen(1, watches::CREATE | DIRECTORY, "d"));
+    let (from, to) = (read(watcher, 0), read(watcher, 0));
+    let cookie = from.1 .2;
+    assert_ne!(cookie, 0);
+    assert_eq!((from, to), ((OK, (1, MOVED_FROM, cookie, "f".to_string())), (OK, (1, MOVED_TO, cookie, "g".to_string()))));
+    assert_eq!(read(watcher, 0), (OK, (2, REMOVED, 0, String::new())));
+    assert_eq!(read(watcher, 0), seen(1, DELETE, "g"));
+    // This port set neither a wait function nor a clock, so a timed read that finds nothing does not wait.
+    assert_eq!(read(watcher, 0).0, TIMEOUT);
+    assert_eq!(read(watcher, 3_600_000_000_000).0, TIMEOUT);
+    assert_eq!(read(ptr::null_mut(), 0).0, INVALID_ARGUMENT);
+    let mut event = Event::EMPTY;
+    assert_eq!(unsafe { w.read.unwrap()(watcher, 0, &mut event, mem::size_of::<Event>() - 1) }, INVALID_ARGUMENT);
+    assert_eq!(unsafe { w.read.unwrap()(watcher, 0, ptr::null_mut(), mem::size_of::<Event>()) }, INVALID_ARGUMENT);
+
+    assert_eq!(unsafe { w.remove.unwrap()(watcher, 2) }, INVALID_ARGUMENT, "the watch ended with its file");
+    assert_eq!(unsafe { w.remove.unwrap()(watcher, 0) }, INVALID_ARGUMENT);
+    assert_eq!(unsafe { w.remove.unwrap()(ptr::null_mut(), 1) }, INVALID_ARGUMENT);
+    assert_eq!(unsafe { w.remove.unwrap()(watcher, 1) }, OK);
+    assert_eq!(read(watcher, FOREVER), (OK, (1, REMOVED, 0, String::new())));
+    // A handle of the files group is no watcher, and a watcher is no file.
+    let (status, file) = open("/watched/h", READ | WRITE | CREATE);
+    assert_eq!(status, OK);
+    assert_eq!(unsafe { w.close.unwrap()(file) }, INVALID_ARGUMENT);
+    assert_eq!(unsafe { f.close.unwrap()(watcher) }, INVALID_ARGUMENT);
+    assert_eq!(unsafe { f.close.unwrap()(file) }, OK);
+    assert_eq!(unsafe { w.close.unwrap()(ptr::null_mut()) }, INVALID_ARGUMENT);
+    assert_eq!(unsafe { w.close.unwrap()(watcher) }, OK);
+
+    // No other test of this file watches, so the counters are this test's.
+    let after = stats();
+    assert_eq!(std::array::from_fn::<u64, 6, _>(|index| after[index] - before[index]), [1, 1, 2, 1, 10, 19]);
+    assert_eq!(unsafe { w.read_stats.unwrap()(ptr::null_mut(), mem::size_of::<watches::Stats>()) }, INVALID_ARGUMENT);
+}
+
+#[test]
+fn mappings_go_through_the_table() {
+    const PAGE: usize = 4096;
+    let (f, m) = (files(), &api().mappings);
+    let stats = || {
+        let mut stats = mappings::Stats::default();
+        assert_eq!(unsafe { m.read_stats.unwrap()(&mut stats, mem::size_of::<mappings::Stats>()) }, OK);
+        [stats.map_ok, stats.unmap_ok, stats.sync_ok, stats.rejected_or_failed]
+    };
+    let before = stats();
+    assert_eq!(mkdir("/mapped"), OK);
+    let (status, file) = open("/mapped/f", READ | WRITE | CREATE);
+    assert_eq!(status, OK);
+    let mut done = 0usize;
+    assert_eq!(unsafe { f.write_at.unwrap()(file, 4999, b"e".as_ptr(), 1, &mut done) }, OK);
+    let map = |file: *mut c_void, offset: u64, length: usize, access: u32, mode: u32| {
+        let mut address = ptr::dangling_mut::<c_void>();
+        (unsafe { m.map.unwrap()(file, offset, length, access, mode, &mut address) }, address.cast::<u8>())
+    };
+    let (read_write, shared, private) = (dotnet_pal_rs::runtime::READ | dotnet_pal_rs::runtime::WRITE, mappings::SHARED, mappings::PRIVATE);
+    let (status, first) = map(file, 0, 2 * PAGE, read_write, shared);
+    assert_eq!(status, OK);
+    let (status, second) = map(file, PAGE as u64, 1000, dotnet_pal_rs::runtime::READ, shared);
+    assert_eq!(status, OK);
+    let (status, copy) = map(file, PAGE as u64, PAGE, read_write, private);
+    assert_eq!(status, OK);
+    // Through the file into both shared mappings, through a mapping into the file, and never into the copy.
+    assert_eq!(unsafe { f.write_at.unwrap()(file, PAGE as u64, b"file".as_ptr(), 4, &mut done) }, OK);
+    assert_eq!(unsafe { (first.add(PAGE).read(), second.read(), second.add(903).read(), copy.read(), copy.add(903).read()) }, (b'f', b'f', b'e', 0, b'e'));
+    unsafe { first.add(PAGE + 1).write(b'I') };
+    unsafe { copy.write(b'c') };
+    let mut data = [0u8; 4];
+    assert_eq!(unsafe { f.read_at.unwrap()(file, PAGE as u64, data.as_mut_ptr(), 4, &mut done) }, OK);
+    assert_eq!((&data, unsafe { second.add(1).read() }), (b"fIle", b'I'));
+    // The file grows to the end of its pages while it is mapped shared.
+    assert_eq!(unsafe { f.set_size.unwrap()(file, 2 * PAGE as u64 + 1) }, dotnet_pal_rs::io::NO_SPACE);
+    assert_eq!(unsafe { f.set_size.unwrap()(file, 2 * PAGE as u64) }, OK);
+
+    // Ten refusals: five by the provider, five by the front end.
+    let (status, reader) = open("/mapped/f", READ);
+    assert_eq!(status, OK);
+    let (status, writer) = open("/mapped/f", WRITE);
+    assert_eq!(status, OK);
+    assert_eq!(map(writer, 0, PAGE, dotnet_pal_rs::runtime::READ, private), (ACCESS_DENIED, ptr::null_mut()));
+    assert_eq!(map(reader, 0, PAGE, read_write, shared), (ACCESS_DENIED, ptr::null_mut()));
+    assert_eq!(map(file, 0, PAGE, read_write | EXECUTE, shared), (UNSUPPORTED, ptr::null_mut()));
+    assert_eq!(map(file, 100, PAGE, read_write, shared), (INVALID_ARGUMENT, ptr::null_mut()));
+    assert_eq!(map(file, 2 * PAGE as u64, 1, read_write, private), (INVALID_ARGUMENT, ptr::null_mut()));
+    assert_eq!(map(file, 0, 0, read_write, shared), (INVALID_ARGUMENT, ptr::null_mut()));
+    assert_eq!(map(file, 0, PAGE, 0, shared), (INVALID_ARGUMENT, ptr::null_mut()));
+    assert_eq!(map(file, 0, PAGE, 8, shared), (INVALID_ARGUMENT, ptr::null_mut()));
+    assert_eq!(map(file, 0, PAGE, read_write, 3), (INVALID_ARGUMENT, ptr::null_mut()));
+    assert_eq!(map(ptr::null_mut(), 0, PAGE, read_write, shared), (INVALID_ARGUMENT, ptr::null_mut()));
+    let (status, granted) = map(reader, 0, PAGE, read_write, private);
+    assert_eq!(status, OK);
+    for handle in [reader, writer, file] { assert_eq!(unsafe { f.close.unwrap()(handle) }, OK); }
+    assert_eq!(unsafe { f.remove.unwrap()(b"/mapped/f".as_ptr(), 9) }, OK);
+    assert_eq!(unsafe { (first.add(PAGE + 1).read(), second.add(1).read(), copy.read(), granted.add(4999 - PAGE).read()) }, (b'I', b'I', b'c', 0));
+
+    // Six refusals: unmap and sync take what one map returned.
+    let (unmap, sync) = (m.unmap.unwrap(), m.sync.unwrap());
+    for call in [unmap, sync] {
+        assert_eq!(unsafe { call(first.cast(), PAGE) }, INVALID_ARGUMENT);
+        assert_eq!(unsafe { call(ptr::null_mut(), PAGE) }, INVALID_ARGUMENT);
+        assert_eq!(unsafe { call(first.cast(), 0) }, INVALID_ARGUMENT);
+    }
+    assert_eq!(unsafe { sync(first.cast(), 2 * PAGE) }, OK);
+    assert_eq!(unsafe { sync(copy.cast(), PAGE) }, OK);
+    for (address, length) in [(first, 2 * PAGE), (second, 1000), (copy, PAGE), (granted, PAGE)] { assert_eq!(unsafe { unmap(address.cast(), length) }, OK); }
+    assert_eq!(unsafe { unmap(second.cast(), 1000) }, INVALID_ARGUMENT);
+
+    // No other test of this file maps, so the counters are this test's.
+    let after = stats();
+    assert_eq!(std::array::from_fn::<u64, 4, _>(|index| after[index] - before[index]), [4, 4, 2, 17]);
+    assert_eq!(unsafe { m.read_stats.unwrap()(ptr::null_mut(), mem::size_of::<mappings::Stats>()) }, INVALID_ARGUMENT);
 }

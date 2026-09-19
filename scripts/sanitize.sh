@@ -4,14 +4,16 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 [[ $# == 1 && ( "$1" == address || "$1" == thread ) ]] || { echo 'usage: sanitize.sh address|thread' >&2; exit 2; }
 sanitizer=$1
-triple=x86_64-unknown-linux-gnu
+# The machine's own architecture: the sanitizer runtimes exist for x86-64 and AArch64 alike.
+triple="$(uname -m)-unknown-linux-gnu"
 rust=nightly-2026-09-01
 out="$PWD/artifacts/$sanitizer"
 mkdir -p "$out"
 ulimit -c 0
 export ASAN_OPTIONS=detect_leaks=1:detect_stack_use_after_return=1:halt_on_error=1:handle_segv=0:handle_sigbus=0
 # Use Clang's sanitizer runtime for the mixed-language final link.
-export TSAN_OPTIONS=halt_on_error=1:exitcode=66:handle_segv=0:handle_sigbus=0
+# The priority test starts threads in a forked child of a threaded parent, which the thread sanitizer refuses by default.
+export TSAN_OPTIONS=halt_on_error=1:exitcode=66:handle_segv=0:handle_sigbus=0:die_after_fork=0
 export RUSTFLAGS="-Zsanitizer=$sanitizer -Zexternal-clangrt -Cdebuginfo=1 -Cforce-frame-pointers=yes"
 common=(-O1 -g -fno-omit-frame-pointer -fsanitize="$sanitizer" -Wall -Wextra -Werror -Iinclude -Inative)
 for backend in linux host-runtime host-support linear linear-heap; do
@@ -39,10 +41,12 @@ for backend in linux host-runtime host-support linear linear-heap; do
       providers=(tests/host_backend.c tests/services_host.c tests/kernel_host.c tests/runtime_host.c)
     fi
     suites=(abi services kernel runtime)
-    if [[ "$backend" == linux ]]; then suites+=(support); fi
+    # The Linux providers of the groups behind System.Native run their conformance tests instrumented as well. Each test
+    # compares the provider with the kernel, so every provider path is executed.
+    if [[ "$backend" == linux ]]; then suites+=(support topology process image streams files sockets system notifications processes terminal watches mappings volumes network local_sockets accounts priority); fi
     for suite in "${suites[@]}"; do
       clang -std=c11 "${common[@]}" "tests/$suite.c" "${providers[@]}" "$lib" \
-        -Wl,--gc-sections -lpthread -ldl -lm -o "$out/$backend-$suite"
+        -Wl,--gc-sections -Wl,--build-id=sha1 -lpthread -ldl -lm -o "$out/$backend-$suite"
       timeout 120s "$out/$backend-$suite"
     done
   fi

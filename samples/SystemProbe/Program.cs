@@ -239,6 +239,86 @@ static unsafe class Program
 #endif
     }
 
+    // ---- users and groups ------------------------------------------------------------------------------------
+    // The BCL keeps these lookups to itself (it uses them to start a child as another user and to decide whether a
+    // file is executable by this process), so the probe calls the entry points of System.Native directly.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Passwd { public byte* Name; public byte* Password; public uint UserId; public uint GroupId; public byte* UserInfo; public byte* HomeDirectory; public byte* Shell; }
+    [DllImport("libSystem.Native", EntryPoint = "SystemNative_GetPwNamR")] private static extern int GetPwNamR(byte* name, Passwd* pwd, byte* buffer, int length);
+    [DllImport("libSystem.Native", EntryPoint = "SystemNative_GetPwUidR")] private static extern int GetPwUidR(uint uid, Passwd* pwd, byte* buffer, int length);
+    [DllImport("libSystem.Native", EntryPoint = "SystemNative_GetGroupList")] private static extern int GetGroupList(byte* name, uint group, uint* groups, int* count);
+    [DllImport("libSystem.Native", EntryPoint = "SystemNative_GetGroups")] private static extern int GetGroups(int count, uint* groups);
+    private static string Text(byte* text) => Marshal.PtrToStringUTF8((IntPtr)text) ?? "";
+
+    private static void Accounts()
+    {
+        byte* buffer = stackalloc byte[4096];
+        Passwd found;
+        fixed (byte* missing = "no-such-user-for-the-probe\0"u8)
+            Check(GetPwNamR(missing, &found, buffer, 4096) == -1, "an account that does not exist was found");
+#if EXPECT_ACCOUNTS
+        // Some account other than the one the probe runs as, taken from the target's own list.
+        string[]? other = File.ReadAllLines("/etc/passwd").Select(l => l.Split(':')).FirstOrDefault(f => f.Length >= 7 && f[0] != Environment.UserName && f[0].Length > 0);
+        Check(other != null, "/etc/passwd names no other account");
+        if (other != null)
+        {
+            byte[] name = System.Text.Encoding.UTF8.GetBytes(other[0] + "\0");
+            fixed (byte* text = name)
+            {
+                Check(GetPwNamR(text, &found, buffer, 4096) == 0 && found.UserId == uint.Parse(other[2]) && found.GroupId == uint.Parse(other[3])
+                    && Text(found.HomeDirectory) == other[5] && Text(found.Shell) == other[6], "account '" + other[0] + "' by name");
+                Check(GetPwUidR(uint.Parse(other[2]), &found, buffer, 4096) == 0 && found.UserId == uint.Parse(other[2]), "account '" + other[0] + "' by id");
+                Check(GetPwNamR(text, &found, buffer, 8) == 34 /* ERANGE */, "a buffer that is too small for an account");
+                uint* groups = stackalloc uint[64];
+                int count = 64;
+                Check(GetGroupList(text, uint.Parse(other[3]), groups, &count) >= 1 && new ReadOnlySpan<uint>(groups, count).Contains(uint.Parse(other[3])), "the groups of '" + other[0] + "'");
+            }
+        }
+        int mine = GetGroups(0, null);
+        Check(mine >= 0, "the group list of this process: " + mine);
+        Console.WriteLine("accounts by name and by id, groups of this process=" + mine);
+#else
+        fixed (byte* text = "nobody\0"u8) Check(GetPwNamR(text, &found, buffer, 4096) != 0 || Environment.UserName == "nobody", "another account was found without the accounts group");
+        Check(GetGroups(0, null) == -1, "a group list without the accounts group");
+        Console.WriteLine("accounts absent, as expected");
+#endif
+    }
+
+    // ---- scheduling priority ------------------------------------------------------------------------------------
+    private static void Priority()
+    {
+        using var self = Process.GetCurrentProcess();
+#if EXPECT_PRIORITY
+        Check(self.PriorityClass == ProcessPriorityClass.Normal, "priority class at the start: " + self.PriorityClass);
+        self.PriorityClass = ProcessPriorityClass.BelowNormal;
+        self.Refresh();
+        Check(self.PriorityClass == ProcessPriorityClass.BelowNormal, "priority class after lowering it: " + self.PriorityClass);
+#if EXPECT_PROCESSES
+        using (var child = Process.Start(new ProcessStartInfo("/bin/sleep", "30") { UseShellExecute = false })!)
+        {
+            child.PriorityClass = ProcessPriorityClass.Idle;
+            child.Refresh();
+            Check(child.PriorityClass == ProcessPriorityClass.Idle, "priority class of a child: " + child.PriorityClass);
+            child.Kill();
+            child.WaitForExit();
+        }
+#endif
+        // Raising it again is a privilege (root in a container often lacks it too): it works, or it is refused and nothing changes.
+        string raised;
+        try { self.PriorityClass = ProcessPriorityClass.Normal; self.Refresh(); Check(self.PriorityClass == ProcessPriorityClass.Normal, "priority class after raising it: " + self.PriorityClass); raised = "allowed"; }
+        catch (Win32Exception e)
+        {
+            self.Refresh();
+            Check((e.NativeErrorCode == 13 || e.NativeErrorCode == 1) && self.PriorityClass == ProcessPriorityClass.BelowNormal, "refused raise: errno " + e.NativeErrorCode + ", class " + self.PriorityClass);
+            raised = "refused";
+        }
+        Console.WriteLine("priority classes pass, raising " + raised);
+#else
+        Check(Throws<Win32Exception>(() => _ = self.PriorityClass), "a priority class without the priority group");
+        Console.WriteLine("priority absent, as expected");
+#endif
+    }
+
     static int Main()
     {
         Console.WriteLine("SYSTEM PROBE start");
@@ -247,6 +327,8 @@ static unsafe class Program
         Processes();
         Notifications();
         Modules();
+        Accounts();
+        Priority();
         Console.WriteLine(s_failures == 0 ? "SYSTEM PROBE PASS" : "SYSTEM PROBE FAIL count=" + s_failures);
         return s_failures == 0 ? 0 : 1;
     }

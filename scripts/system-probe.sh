@@ -22,7 +22,7 @@ rm "$framework/libSystem.Native.a"
 cp artifacts/system-native/libSystem.Native.a "$framework/libSystem.Native.a"
 cargo rustc --lib --crate-type staticlib --release --features linux
 rm -rf samples/SystemProbe/obj samples/SystemProbe/bin
-dotnet publish samples/SystemProbe/SystemProbe.csproj -c Release -r "$rid" '-p:ProbeExpect=system%3Bprocesses%3Bnotifications%3Blinks%3Bmodules' \
+dotnet publish samples/SystemProbe/SystemProbe.csproj -c Release -r "$rid" '-p:ProbeExpect=system%3Bprocesses%3Bnotifications%3Blinks%3Bmodules%3Baccounts%3Bpriority' \
   "-p:IlcSdkPath=$overlay/" "-p:IlcFrameworkNativePath=$framework/" \
   "-p:PalLinkMap=$root/artifacts/system-probe/link.map" -o artifacts/system-probe
 SYSTEM_PROBE_VALUE=from-the-boundary timeout 300s artifacts/system-probe/SystemProbe | tee artifacts/system-probe/run.log
@@ -38,7 +38,8 @@ foreign = sorted(name for name, origin in providers.items() if not re.search(r'l
 print(f"SystemNative symbols linked: {len(providers)}; from the boundary objects: {len(providers) - len(foreign)}")
 if foreign: raise SystemExit('SystemNative symbols not provided by native/system_native_*.c: ' + ', '.join(foreign))
 for needed in ('SystemNative_GetEnviron', 'SystemNative_ForkAndExecProcess', 'SystemNative_WaitPidExitedNoHang', 'SystemNative_EnablePosixSignalHandling',
-               'SystemNative_SymLink', 'SystemNative_ChMod', 'SystemNative_UTimensat', 'SystemNative_FLock', 'SystemNative_LockFileRegion', 'SystemNative_LoadLibrary'):
+               'SystemNative_SymLink', 'SystemNative_ChMod', 'SystemNative_UTimensat', 'SystemNative_FLock', 'SystemNative_LockFileRegion', 'SystemNative_LoadLibrary',
+               'SystemNative_GetPwNamR', 'SystemNative_GetGroupList', 'SystemNative_GetPriority', 'SystemNative_SetPriority'):
     if needed not in providers: raise SystemExit(needed + ' is not in the image: the probe no longer reaches it')
 PY
 python3 scripts/audit_dependencies.py --runtime "$overlay/libRuntime.WorkstationGC.a" --runtime "$overlay/libaotminipal.a" \

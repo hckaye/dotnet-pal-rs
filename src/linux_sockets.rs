@@ -3,19 +3,23 @@
 //! heap; a handle is a CRT allocation holding the descriptor, so descriptor 0
 //! is as valid as any other, and the one setting the kernel does not read back:
 //! getsockopt(IP_MULTICAST_IF) answers with an address (4 bytes, measured on
-//! Linux 6.12), never with the index the option was set from.
+//! Linux 6.12), never with the index the option was set from. The handle also
+//! says whether the socket is a Unix domain socket and whether it is a stream:
+//! the calls that take an IP address refuse a local socket before the kernel
+//! sees the address, and the sender of what a local socket receives is answered
+//! from the handle, because the kernel names it by whether it has a path.
 use crate::kernel::INFINITE;
 use crate::linux::Linux;
 use crate::port::{self, Error, Result};
-use crate::sockets::{self, Address, PollEntry, DATAGRAM, IPV4, IPV6, MAX_HOST_NAME, POLL_CHANNELS, POLL_ERROR, POLL_HANGUP, POLL_READ, POLL_WRITE, RECEIVE_PEEK, STREAM};
+use crate::sockets::{self, Address, PollEntry, DATAGRAM, IPV4, IPV6, LOCAL, MAX_HOST_NAME, POLL_CHANNELS, POLL_ERROR, POLL_HANGUP, POLL_READ, POLL_WRITE, RECEIVE_PEEK, STREAM};
 use core::{ffi::c_void, mem, ptr, sync::atomic::{AtomicI32, AtomicU32, Ordering}};
 
 #[repr(C)]
-struct Socket { fd: i32, multicast_interface: AtomicU32 }
+struct Socket { fd: i32, local: bool, stream: bool, multicast_interface: AtomicU32 }
 /// Polls of at most this many descriptors (the entries plus the channel's eventfd) stay on the stack.
 const INLINE_POLL: usize = 64;
 
-fn errno() -> i32 { unsafe { *libc::__errno_location() } }
+pub(crate) fn errno() -> i32 { unsafe { *libc::__errno_location() } }
 /// The boundary's name for an errno value. EWOULDBLOCK is EAGAIN on Linux.
 fn error(code: i32) -> Error {
     match code {
@@ -34,7 +38,7 @@ fn error(code: i32) -> Error {
 fn failed<T>() -> Result<T> { Err(error(errno())) }
 /// The failure of a transfer or an accept. The kernel reports an expired SO_RCVTIMEO or SO_SNDTIMEO
 /// as EAGAIN, the error a non-blocking socket uses for "not now"; the descriptor's mode tells them apart.
-fn waited<T>(fd: i32) -> Result<T> {
+pub(crate) fn waited<T>(fd: i32) -> Result<T> {
     let code = errno();
     if code == libc::EAGAIN && unsafe { libc::fcntl(fd, libc::F_GETFL) } & libc::O_NONBLOCK == 0 { return Err(Error::Timeout); }
     Err(error(code))
@@ -43,15 +47,27 @@ pub(crate) unsafe fn descriptor(socket: *mut c_void) -> Result<i32> {
     if socket.is_null() || !(socket as usize).is_multiple_of(mem::align_of::<Socket>()) { return Err(Error::InvalidArgument); }
     Ok(unsafe { (*socket.cast::<Socket>()).fd })
 }
-/// `(is a stream, is IPv6)` of a descriptor: its protocol decides which options and which group calls it has.
-pub(crate) fn shape(fd: i32) -> Result<(bool, bool)> {
-    Ok((get::<i32>(fd, libc::SOL_SOCKET, libc::SO_TYPE)? == libc::SOCK_STREAM, get::<i32>(fd, libc::SOL_SOCKET, libc::SO_DOMAIN)? == libc::AF_INET6))
+/// The descriptor of a Unix domain socket and whether it is a stream; `Err(InvalidArgument)` for a socket of another family.
+pub(crate) unsafe fn local(socket: *mut c_void) -> Result<(i32, bool)> {
+    let fd = unsafe { descriptor(socket) }?;
+    // SAFETY: `descriptor` has checked the handle, which `wrap` made.
+    let socket = unsafe { &*socket.cast::<Socket>() };
+    if socket.local { Ok((fd, socket.stream)) } else { Err(Error::InvalidArgument) }
+}
+/// The descriptor of a socket that takes IP addresses; a local socket has none to bind, reach or send to.
+unsafe fn internet(socket: *mut c_void) -> Result<i32> {
+    let fd = unsafe { descriptor(socket) }?;
+    if unsafe { (*socket.cast::<Socket>()).local } { Err(Error::InvalidArgument) } else { Ok(fd) }
+}
+/// `(is a stream, the domain)` of a descriptor: its protocol decides which options and which group calls it has.
+pub(crate) fn shape(fd: i32) -> Result<(bool, i32)> {
+    Ok((get::<i32>(fd, libc::SOL_SOCKET, libc::SO_TYPE)? == libc::SOCK_STREAM, get::<i32>(fd, libc::SOL_SOCKET, libc::SO_DOMAIN)?))
 }
 /// Wraps a descriptor this provider owns; the descriptor is closed when no handle can be made.
-fn wrap(fd: i32) -> Result<*mut c_void> {
+fn wrap(fd: i32, local: bool, stream: bool) -> Result<*mut c_void> {
     let p = unsafe { libc::calloc(1, mem::size_of::<Socket>()) }.cast::<Socket>();
     if p.is_null() { unsafe { libc::close(fd) }; return Err(Error::OutOfMemory); }
-    unsafe { (*p).fd = fd };
+    unsafe { (*p).fd = fd; (*p).local = local; (*p).stream = stream; }
     Ok(p.cast())
 }
 
@@ -76,7 +92,8 @@ pub(crate) fn native(address: &Address) -> Result<(libc::sockaddr_storage, libc:
         _ => Err(Error::InvalidArgument),
     }
 }
-/// The boundary's form of a native address; `None` for another family or a short answer.
+/// The boundary's form of a native address: the bare family for a Unix domain socket, whose path the
+/// local_sockets group reports; `None` for another family or a short answer.
 unsafe fn boundary(raw: *const libc::sockaddr, length: libc::socklen_t) -> Option<Address> {
     let length = length as usize;
     if raw.is_null() || length < mem::size_of::<libc::sa_family_t>() { return None; }
@@ -89,6 +106,7 @@ unsafe fn boundary(raw: *const libc::sockaddr, length: libc::socklen_t) -> Optio
             let v6 = unsafe { raw.cast::<libc::sockaddr_in6>().read_unaligned() };
             Some(Address::v6(v6.sin6_addr.s6_addr, u16::from_be(v6.sin6_port), v6.sin6_scope_id))
         }
+        libc::AF_UNIX => Some(Address { family: LOCAL as u16, ..Address::default() }),
         _ => None,
     }
 }
@@ -101,7 +119,7 @@ unsafe fn endpoint(socket: *mut c_void, query: Query) -> Result<Address> {
     unsafe { boundary(ptr::addr_of!(storage).cast(), length) }.ok_or(Error::Os)
 }
 
-fn get<T>(fd: i32, level: i32, name: i32) -> Result<T> {
+pub(crate) fn get<T>(fd: i32, level: i32, name: i32) -> Result<T> {
     let mut value = mem::MaybeUninit::<T>::zeroed();
     let mut length = mem::size_of::<T>() as libc::socklen_t;
     if unsafe { libc::getsockopt(fd, level, name, value.as_mut_ptr().cast(), &mut length) } != 0 { return failed(); }
@@ -127,10 +145,11 @@ fn integer(option: u32) -> Option<(i32, i32, bool)> {
 }
 /// `(level, name, is a flag)` of the hop limits and multicast options, which live at the level of the socket's family.
 /// A stream socket has none of the multicast ones, and the kernel does not say so the same way twice (EINVAL,
-/// ENOPROTOOPT or success, measured), so that answer is made here.
+/// ENOPROTOOPT or success, measured), so that answer is made here. A local socket has none of them at all.
 fn routed(fd: i32, option: u32) -> Result<(i32, i32, bool)> {
-    let (stream, v6) = shape(fd)?;
-    if stream && option != sockets::HOPS { return Err(Error::Unsupported); }
+    let (stream, domain) = shape(fd)?;
+    if domain == libc::AF_UNIX || (stream && option != sockets::HOPS) { return Err(Error::Unsupported); }
+    let v6 = domain == libc::AF_INET6;
     Ok(match (option, v6) {
         (sockets::HOPS, false) => (libc::IPPROTO_IP, libc::IP_TTL, false), (sockets::HOPS, true) => (libc::IPPROTO_IPV6, libc::IPV6_UNICAST_HOPS, false),
         (sockets::MULTICAST_HOPS, false) => (libc::IPPROTO_IP, libc::IP_MULTICAST_TTL, false),
@@ -196,11 +215,11 @@ unsafe fn wait(entries: &mut [PollEntry], set: &mut [libc::pollfd], wake: Option
 
 impl port::Sockets for Linux {
     unsafe fn create(family: u32, kind: u32) -> Result<*mut c_void> {
-        let domain = match family { IPV4 => libc::AF_INET, IPV6 => libc::AF_INET6, _ => return Err(Error::InvalidArgument) };
-        let kind = match kind { STREAM => libc::SOCK_STREAM, DATAGRAM => libc::SOCK_DGRAM, _ => return Err(Error::InvalidArgument) };
-        let fd = unsafe { libc::socket(domain, kind | libc::SOCK_CLOEXEC, 0) };
+        let domain = match family { IPV4 => libc::AF_INET, IPV6 => libc::AF_INET6, LOCAL => libc::AF_UNIX, _ => return Err(Error::InvalidArgument) };
+        let shape = match kind { STREAM => libc::SOCK_STREAM, DATAGRAM => libc::SOCK_DGRAM, _ => return Err(Error::InvalidArgument) };
+        let fd = unsafe { libc::socket(domain, shape | libc::SOCK_CLOEXEC, 0) };
         if fd < 0 { return failed(); }
-        wrap(fd)
+        wrap(fd, family == LOCAL, kind == STREAM)
     }
     unsafe fn close(socket: *mut c_void) -> Result<()> {
         let fd = unsafe { descriptor(socket) }?;
@@ -210,7 +229,7 @@ impl port::Sockets for Linux {
         if code == 0 || code == libc::EINTR { Ok(()) } else { Err(error(code)) }
     }
     unsafe fn bind(socket: *mut c_void, address: &Address) -> Result<()> {
-        let (fd, (storage, length)) = (unsafe { descriptor(socket) }?, native(address)?);
+        let (fd, (storage, length)) = (unsafe { internet(socket) }?, native(address)?);
         if unsafe { libc::bind(fd, ptr::addr_of!(storage).cast(), length) } != 0 { return failed(); }
         Ok(())
     }
@@ -221,17 +240,18 @@ impl port::Sockets for Linux {
     }
     unsafe fn accept(socket: *mut c_void) -> Result<(*mut c_void, Address)> {
         let fd = unsafe { descriptor(socket) }?;
+        let local = unsafe { (*socket.cast::<Socket>()).local };
         loop {
             let mut storage: libc::sockaddr_storage = unsafe { mem::zeroed() };
             let mut length = mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
             // The accepted descriptor does not inherit O_NONBLOCK on Linux: it starts blocking as the contract says.
             let accepted = unsafe { libc::accept4(fd, ptr::addr_of_mut!(storage).cast(), &mut length, libc::SOCK_CLOEXEC) };
             if accepted < 0 { if errno() == libc::EINTR { continue; } return waited(fd); }
-            return Ok((wrap(accepted)?, unsafe { boundary(ptr::addr_of!(storage).cast(), length) }.unwrap_or_default()));
+            return Ok((wrap(accepted, local, true)?, unsafe { boundary(ptr::addr_of!(storage).cast(), length) }.unwrap_or_default()));
         }
     }
     unsafe fn connect(socket: *mut c_void, address: &Address) -> Result<()> {
-        let (fd, (storage, length)) = (unsafe { descriptor(socket) }?, native(address)?);
+        let (fd, (storage, length)) = (unsafe { internet(socket) }?, native(address)?);
         if unsafe { libc::connect(fd, ptr::addr_of!(storage).cast(), length) } == 0 { return Ok(()); }
         if errno() != libc::EINTR { return failed(); }
         // An interrupted connect carries on in the kernel; a second call would report EALREADY. Wait for its outcome instead.
@@ -240,7 +260,7 @@ impl port::Sockets for Linux {
         match get::<i32>(fd, libc::SOL_SOCKET, libc::SO_ERROR)? { 0 => Ok(()), code => Err(error(code)) }
     }
     unsafe fn send(socket: *mut c_void, data: *const u8, size: usize, to: Option<&Address>) -> Result<usize> {
-        let fd = unsafe { descriptor(socket) }?;
+        let fd = if to.is_some() { unsafe { internet(socket) } } else { unsafe { descriptor(socket) } }?;
         let target = match to { Some(address) => Some(native(address)?), None => None };
         let (address, length) = match &target { Some((storage, length)) => ((storage as *const libc::sockaddr_storage).cast(), *length), None => (ptr::null(), 0) };
         loop {
@@ -257,8 +277,12 @@ impl port::Sockets for Linux {
             let mut length = mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
             let n = unsafe { libc::recvfrom(fd, out.cast(), capacity, flags, ptr::addr_of_mut!(storage).cast(), &mut length) };
             if n < 0 { if errno() == libc::EINTR { continue; } return waited(fd); }
-            // A stream socket names no sender: the kernel reports a zero length and the answer is `None`.
-            return Ok((n as usize, unsafe { boundary(ptr::addr_of!(storage).cast(), length) }));
+            // A stream socket names no sender: the kernel reports a zero length and the answer is `None`. For a local socket the
+            // kernel goes by the sender's name instead (measured): it names a stream's sender that has a path and no datagram's
+            // sender that has none, so the handle answers.
+            let handle = unsafe { &*socket.cast::<Socket>() };
+            let sender = if handle.local { (!handle.stream).then_some(Address { family: LOCAL as u16, ..Address::default() }) } else { unsafe { boundary(ptr::addr_of!(storage).cast(), length) } };
+            return Ok((n as usize, sender));
         }
     }
     unsafe fn shutdown(socket: *mut c_void, how: u32) -> Result<()> {

@@ -49,12 +49,12 @@ builds an image with all of them plus the pinned .NET SDK, for macOS developers.
 | `Image` | the image's own `.eh_frame_hdr`/`.eh_frame` from the linker script; RAM is readable, device space is not |
 | `Modules` | the one image, named `app`, base at the load address |
 | `Faults` | the synchronous exception vector: the interrupted registers go to the installed handler, which may edit them and resume |
-| `Files`, `Volumes` | `dotnet-pal-memfs`, an in-memory file system on the port's heap through the Rust global allocator, with links, modes, times and locks; times from the port's wall clock; one volume at `/` with the capacity of the file system |
+| `Files`, `Volumes`, `Watches`, `Mappings` | `dotnet-pal-memfs`, an in-memory file system on the port's heap through the Rust global allocator, with links, modes, times, locks, change events and file mappings; times from the port's wall clock; a reader that waits sleeps in the port's scheduler; one volume at `/` with the capacity of the file system |
 | `SystemInfo` | the machine's name and the crate version as OS texts, the time since reset as uptime, `/app` as the executable's path; an empty environment enumeration; no user and no CPU accounting |
 
 Absent, and reported as absent capability bits with NULL callbacks:
 `Environment`, `Entropy`, `Context`, `Sockets`, `Network`, `Notifications`,
-`Processes`, `Terminal`, `Watches`, `Mappings`, `Wasi` and linear storage.
+`Processes`, `Terminal`, `LocalSockets`, `Accounts`, `Priority`, `Wasi` and linear storage.
 
 ## Running a C# program
 
@@ -77,9 +77,12 @@ The managed program sees one processor, no environment variables, an input strea
 at end of input, an empty file system rooted at `/` that lives in RAM, and no
 network: creating a socket fails as `AddressFamilyNotSupported`. Symbolic links,
 permission bits, timestamps, file locks and the working directory work on that file
-system, and `DriveInfo` reports it as one drive of format `memfs`. Starting a child
-process, registering for a signal, loading a native library, watching a directory and
-mapping a file fail as unsupported, which `SystemProbe` and `FacilitiesProbe` assert.
+system, `FileSystemWatcher` and `MemoryMappedFile` work on it, and `DriveInfo` reports it
+as one drive of format `memfs`. Starting a child process, registering for a signal,
+loading a native library, listing network interfaces and opening a Unix domain socket
+fail as unsupported, which `SystemProbe` and `FacilitiesProbe` assert. An anonymous
+`MemoryMappedFile.CreateNew` fails because the machine has no entropy for the `Guid` the
+BCL names its backing file with.
 A null dereference
 in managed code becomes `NullReferenceException`. The vector reports the fault, the
 runtime's handler redirects the frame to its throw helper, and the port resumes

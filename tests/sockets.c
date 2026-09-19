@@ -430,7 +430,7 @@ static void validation(void) {
     bad.family = 9;
     assert(s->read_stats(&before, sizeof before) == 0);
     REJECT(s->create(0, TCP, &handle)); assert(handle == NULL);
-    REJECT(s->create(3, TCP, &handle)); REJECT(s->create(V4, 0, &handle)); REJECT(s->create(V4, 3, &handle)); REJECT(s->create(V4, TCP, NULL));
+    REJECT(s->create(4, TCP, &handle)); REJECT(s->create(V4, 0, &handle)); REJECT(s->create(V4, 3, &handle)); REJECT(s->create(V4, TCP, NULL));
     REJECT(s->close(NULL));
     REJECT(s->bind(NULL, &at)); REJECT(s->bind(socket, NULL)); REJECT(s->bind(socket, &bad));
     REJECT(s->listen(NULL, 1));

@@ -216,6 +216,7 @@ int main(int argc, char **argv) {
     assert(before.environment_ok == 2 * (count - too_long) && before.identity_ok == 1 && before.times_ok == 3);
     /* clearenv leaves the C library without a block at all: an environment without a first entry. */
     assert(clearenv() == 0 && environ == NULL);
+    free(block); /* the test's own block: clearenv only drops the pointer to it */
     refuses(1, 0, DOTNET_PAL_NOT_FOUND);
     printf("SYSTEM PASS variables=%zu too_long=%zu os=%s %s user=%s uid=%u gid=%u unknown_user=%d cpu_ms=%llu+%llu uptime_s=%llu\n", count, too_long,
         names.sysname, names.release, name, uid, gid, unknown_user, (unsigned long long)(user / MS), (unsigned long long)(kernel / MS), (unsigned long long)(uptime / (1000 * MS)));

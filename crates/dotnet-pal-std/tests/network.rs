@@ -320,17 +320,19 @@ mod unix {
     fn member(socket: *mut c_void, group: &Address, interface: u32, join: u32) -> u32 { unsafe { ops().membership.unwrap()(socket, group, interface, join) } }
     /// Whether a datagram with this text reaches the socket in time; anything else that arrives is read and dropped (a copy of
     /// an earlier datagram must not pass for the one sent after it).
-    fn arrives(socket: *mut c_void, wanted: &[u8], within: Duration) -> bool {
+    fn arrives(socket: *mut c_void, wanted: &[u8], within: Duration) -> bool { sender_of(socket, wanted, within).is_some() }
+    /// The same, with the address the datagram came from.
+    fn sender_of(socket: *mut c_void, wanted: &[u8], within: Duration) -> Option<Address> {
         let deadline = Instant::now() + within;
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() { return false; }
+            if left.is_zero() { return None; }
             let (mut entry, mut ready) = ([PollEntry { socket, requested: POLL_READ, triggered: 0 }], 0usize);
             assert_eq!(unsafe { socket_ops().poll.unwrap()(entry.as_mut_ptr(), 1, left.as_nanos() as u64, NO_CHANNEL, &mut ready) }, OK);
             if ready == 0 { continue; }
-            let (mut data, mut done) = ([0u8; 16], 0usize);
-            assert_eq!(unsafe { socket_ops().receive.unwrap()(socket, data.as_mut_ptr(), data.len(), 0, ptr::null_mut(), &mut done) }, OK);
-            if &data[..done] == wanted { return true; }
+            let (mut data, mut done, mut from) = ([0u8; 16], 0usize, Address::default());
+            assert_eq!(unsafe { socket_ops().receive.unwrap()(socket, data.as_mut_ptr(), data.len(), 0, &mut from, &mut done) }, OK);
+            if &data[..done] == wanted { return Some(from); }
         }
     }
     /// An interface of the group's own list that is up, carries multicast, is no loopback and has an address of `family`.
@@ -341,6 +343,8 @@ mod unix {
     /// A datagram to `group` reaches a member through `interface`, and no longer once the socket has left; then the statuses of a socket that is, and is not, in a group.
     fn traffic_and_statuses(family: u32, mut group: Address, other_family: Address, interface: u32) {
         let (receiver, sender, stream) = (open(family, UDP), open(family, UDP), open(family, TCP));
+        // An IPv6 socket that carries IPv6 alone, so that an IPv4 group is not its own.
+        if family == V6 { set(receiver, sockets::IPV6_ONLY, 1); }
         group.port = bind_any(receiver, family);
         if family == V6 { group.scope = interface; }
         set(sender, sockets::MULTICAST_LOOPBACK, 1);
@@ -355,10 +359,47 @@ mod unix {
         assert!(!arrives(receiver, b"second", Duration::from_millis(300)), "a socket that left receives nothing more");
         assert_eq!(member(receiver, &group, interface, 0), ADDRESS_NOT_AVAILABLE);
         assert_eq!((member(receiver, &group, 999_999, 1), member(receiver, &group, u32::MAX, 1)), (NOT_FOUND, NOT_FOUND));
-        // A stream socket has no groups, and a group of the other family is not this socket's.
+        // A stream socket has no groups, and a group of a family the socket does not carry is not this socket's.
         assert_eq!((member(stream, &group, interface, 1), member(receiver, &other_family, interface, 1)), (INVALID_ARGUMENT, INVALID_ARGUMENT));
         for socket in [receiver, sender, stream] { close(socket); }
     }
+    /// The BCL joins an IPv4 group on a dual-mode UDP socket. Linux takes the IPv4 option on the IPv6 socket, macOS the group mapped
+    /// into IPv6; on both the sender shows as its IPv4 address mapped into IPv6 (::ffff:a.b.c.d).
+    #[test]
+    fn an_ipv6_socket_that_carries_both_families_joins_an_ipv4_group() {
+        let _serial = serial();
+        let lists = lists();
+        let Some(interface) = multicast_interface(&lists, V4) else { println!("NETWORK note: no interface that is up, carries multicast and has an IPv4 address; an IPv4 group on an IPv6 socket is unchecked"); return; };
+        let mut probe = ptr::null_mut();
+        if unsafe { socket_ops().create.unwrap()(V6, UDP, &mut probe) } != OK { println!("NETWORK note: no IPv6 sockets here; an IPv4 group on an IPv6 socket is unchecked"); return; }
+        close(probe);
+        let start = counts(&stats());
+        let (receiver, sender, only) = (open(V6, UDP), open(V4, UDP), open(V6, UDP));
+        set(receiver, sockets::IPV6_ONLY, 0);
+        set(only, sockets::IPV6_ONLY, 1);
+        let group = Address::v4([239, 255, 77, 79], bind_any(receiver, V6));
+        bind_any(only, V6);
+        set(sender, sockets::MULTICAST_LOOPBACK, 1);
+        set(sender, sockets::MULTICAST_INTERFACE, interface as u64);
+        let send = |text: &[u8]| { let mut done = 0usize; assert_eq!((unsafe { socket_ops().send.unwrap()(sender, text.as_ptr(), text.len(), &group, &mut done) }, done), (OK, text.len())); };
+        assert_eq!((member(receiver, &group, interface, 0), member(receiver, &group, interface, 1)), (ADDRESS_NOT_AVAILABLE, OK));
+        send(b"mapped");
+        let from = sender_of(receiver, b"mapped", Duration::from_secs(5)).expect("a member receives the IPv4 group's datagram");
+        let mut at = Address::default();
+        assert_eq!(unsafe { socket_ops().local_address.unwrap()(sender, &mut at) }, OK);
+        assert_eq!((from.family as u32, from.port, &from.address[..12]), (V6, at.port, &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff][..]), "{from:?}");
+        assert_eq!(lists.1.iter().filter(|a| a.interface_index == interface && a.address.family as u32 == V4 && a.address.address[..4] == from.address[12..]).count(), 1, "{from:?} is an address of interface {interface}");
+        assert_eq!((member(receiver, &group, interface, 1), member(receiver, &group, interface, 0)), (ADDRESS_IN_USE, OK));
+        send(b"after");
+        assert!(!arrives(receiver, b"after", Duration::from_millis(300)), "a socket that left receives nothing more");
+        assert_eq!(member(receiver, &group, interface, 0), ADDRESS_NOT_AVAILABLE);
+        // Either OS would let an IPv6-only socket join and deliver nothing to it.
+        assert_eq!((member(only, &group, interface, 1), member(only, &group, interface, 0)), (INVALID_ARGUMENT, INVALID_ARGUMENT));
+        assert_eq!(counts(&stats()), { let mut c = start; c[3] += 2; c[4] += 5; c });
+        for socket in [receiver, sender, only] { close(socket); }
+        println!("NETWORK note: an IPv4 group on an IPv6 socket checked on interface {interface}, the sender shows as {:?}", &from.address[10..]);
+    }
+
     #[test]
     fn membership_joins_and_leaves_with_real_datagrams() {
         let _serial = serial();

@@ -1,7 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- Four more facilities of the BCL through the boundary: FileSystemWatcher (watches group),
        MemoryMappedFile (mappings), DriveInfo (volumes), and NetworkInterface, reverse lookup,
-       multicast membership and the keep-alive and hop-limit socket options (network and sockets).
+       multicast membership and the keep-alive and hop-limit socket options (network and sockets),
+       and Unix domain sockets with the named pipes built on them (local sockets).
        ProbeExpect names what the port under test provides; the probe asserts the honest
        failure of what it does not. -->
   <PropertyGroup>
@@ -16,11 +17,13 @@
     <InvariantTimezone>true</InvariantTimezone>
     <UseSystemResourceKeys>true</UseSystemResourceKeys>
     <IlcOptimizationPreference>Size</IlcOptimizationPreference>
-    <ProbeExpect Condition="'$(ProbeExpect)' == ''">watches;mappings;volumes;network</ProbeExpect>
+    <ProbeExpect Condition="'$(ProbeExpect)' == ''">watches;mappings;volumes;network;local</ProbeExpect>
     <DefineConstants Condition="$(ProbeExpect.Contains('watches'))">$(DefineConstants);EXPECT_WATCHES</DefineConstants>
     <DefineConstants Condition="$(ProbeExpect.Contains('mappings'))">$(DefineConstants);EXPECT_MAPPINGS</DefineConstants>
     <DefineConstants Condition="$(ProbeExpect.Contains('volumes'))">$(DefineConstants);EXPECT_VOLUMES</DefineConstants>
     <DefineConstants Condition="$(ProbeExpect.Contains('network'))">$(DefineConstants);EXPECT_NETWORK</DefineConstants>
+    <DefineConstants Condition="$(ProbeExpect.Contains('local'))">$(DefineConstants);EXPECT_LOCAL</DefineConstants>
+    <DefineConstants Condition="$(ProbeExpect.Contains('noentropy'))">$(DefineConstants);EXPECT_NO_ENTROPY</DefineConstants>
     <PalRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))</PalRoot>
     <PalLib Condition="'$(PalLib)' == ''">$(PalRoot)/target/release/libdotnet_pal_rs.a</PalLib>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

@@ -1665,7 +1665,7 @@ mod sockets_table {
         let (code, socket) = create(V4, UDP);
         assert_eq!(code, OK);
         let (at, bad, null) = (loopback(V4, 0), Address { family: 9, ..loopback(V4, 0) }, ptr::null_mut::<c_void>());
-        for (family, kind) in [(0, TCP), (3, TCP), (V4, 0), (V4, 3)] { assert_eq!(create(family, kind), (INVALID_ARGUMENT, ptr::null_mut()), "family {family} kind {kind}"); }
+        for (family, kind) in [(0, TCP), (4, TCP), (V4, 0), (V4, 3)] { assert_eq!(create(family, kind), (INVALID_ARGUMENT, ptr::null_mut()), "family {family} kind {kind}"); }
         assert_eq!(unsafe { s.create.unwrap()(V4, TCP, ptr::null_mut()) }, INVALID_ARGUMENT);
         assert_eq!((close(null), bind(null, &at), bind(socket, &bad), unsafe { s.bind.unwrap()(socket, ptr::null()) }), (INVALID_ARGUMENT, INVALID_ARGUMENT, INVALID_ARGUMENT, INVALID_ARGUMENT));
         assert_eq!((unsafe { s.listen.unwrap()(null, 1) }, accept(null), connect(null, &at), connect(socket, &bad)),

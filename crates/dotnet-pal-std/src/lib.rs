@@ -30,6 +30,9 @@
 //! | Files mapped into memory (shared and private mappings of a file handle, synchronization) | `mmap`, `munmap` and `msync` on the handle's descriptor; absent on Windows |
 //! | Mounted volumes (mount points, capacity, free space, format name) | /proc/self/mounts and `statvfs` on Linux, `getfsstat` and `statfs` on macOS; absent elsewhere |
 //! | Network (interfaces and their addresses, reverse lookup, multicast membership) | `getifaddrs` with the link-layer entries, the MTU ioctl and sysfs on Linux, `getnameinfo`, `socket2` on the sockets provider's handles; absent on Windows |
+//! | Unix domain sockets (bind and connect by path, the paths of a socket and its peer, the peer's user) | `socket2` on the sockets provider's handles, SO_PEERCRED on Linux and `getpeereid` on macOS; absent on Windows |
+//! | Accounts (a user by id or by name, the groups of this process and of an account) | `getpwuid_r`, `getpwnam_r`, `getgroups` and `getgrouplist`; absent on Windows |
+//! | Scheduling priority of a process (a niceness from -20 to 19) | `getpriority` and `setpriority`, on Linux for every thread of the process; the six priority classes on Windows |
 //! | Signal context, WASI transport | absent |
 //!
 //! With the `entry` feature the crate exports `dotnet_pal_get_api` itself, so
@@ -57,6 +60,9 @@ mod watches;
 mod mappings;
 mod volumes;
 mod network;
+mod local_sockets;
+mod accounts;
+mod priority;
 #[cfg(all(any(target_os = "linux", target_os = "macos"), any(target_arch = "aarch64", target_arch = "x86_64")))]
 mod faults;
 /// No signal context `faults.rs` can convert: the capability is absent.
@@ -596,7 +602,8 @@ dotnet_pal_rs::declare_port! {
     NativeHeap = Std, RwLocks = Std, ThreadName = Std, Diagnostics = Std, Abort = Std,
     Topology = Std, Process = Std, Image = system::ImageProvider, Streams = Std, Files = Std,
     Sockets = Std, Faults = faults::Provider, SystemInfo = Std, Notifications = Std, Processes = Std, Terminal = Std,
-    Watches = Std, Mappings = Std, Volumes = Std, Network = Std
+    Watches = Std, Mappings = Std, Volumes = Std, Network = Std, LocalSockets = Std,
+    Accounts = Std, Priority = Std
 }
 
 /// Negotiated table for [`StdPort`], usable from Rust without the C symbol.

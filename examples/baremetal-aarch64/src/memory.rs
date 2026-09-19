@@ -355,18 +355,41 @@ impl port::NativeHeap for Baremetal {
 /// 16-byte alignment, and a request that did would fail instead of being misaligned.
 struct PortAllocator;
 // SAFETY: blocks come from the native heap above, which hands out exclusive,
-// 16-byte aligned storage and keeps a failed resize's old block intact.
+// 16-byte aligned storage and keeps a failed resize's old block intact. A stricter
+// alignment (the in-memory file system maps files in whole pages) is a larger heap
+// block with the aligned address inside it and the block's own address in the word
+// before that, which is where `dealloc` finds it again.
 unsafe impl core::alloc::GlobalAlloc for PortAllocator {
     unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
-        if layout.align() > GRAIN { return ptr::null_mut(); }
-        unsafe { <Baremetal as port::NativeHeap>::allocate(layout.size().max(1), false) }.map_or(ptr::null_mut(), |p| p.cast())
+        if layout.align() <= GRAIN {
+            return unsafe { <Baremetal as port::NativeHeap>::allocate(layout.size().max(1), false) }.map_or(ptr::null_mut(), |p| p.cast());
+        }
+        const WORD: usize = core::mem::size_of::<usize>();
+        let Some(total) = layout.size().checked_add(layout.align()).and_then(|n| n.checked_add(WORD)) else { return ptr::null_mut(); };
+        let Ok(block) = (unsafe { <Baremetal as port::NativeHeap>::allocate(total, false) }) else { return ptr::null_mut(); };
+        let aligned = (block as usize + WORD).next_multiple_of(layout.align());
+        // SAFETY: `aligned - WORD` lies inside the block, at or after its start, and is word-aligned because `aligned` is.
+        unsafe { ((aligned - WORD) as *mut usize).write(block as usize) };
+        aligned as *mut u8
     }
-    unsafe fn dealloc(&self, address: *mut u8, _: core::alloc::Layout) {
-        let _ = unsafe { <Baremetal as port::NativeHeap>::release(address.cast()) };
+    unsafe fn dealloc(&self, address: *mut u8, layout: core::alloc::Layout) {
+        let block = if layout.align() <= GRAIN { address.cast() } else {
+            // SAFETY: `alloc` stored the block's address in the word before an over-aligned address.
+            unsafe { (address as *const usize).sub(1).read() as *mut core::ffi::c_void }
+        };
+        let _ = unsafe { <Baremetal as port::NativeHeap>::release(block) };
     }
     unsafe fn realloc(&self, address: *mut u8, layout: core::alloc::Layout, size: usize) -> *mut u8 {
-        if layout.align() > GRAIN { return ptr::null_mut(); }
-        unsafe { <Baremetal as port::NativeHeap>::resize(address.cast(), size.max(1)) }.map_or(ptr::null_mut(), |p| p.cast())
+        if layout.align() <= GRAIN {
+            return unsafe { <Baremetal as port::NativeHeap>::resize(address.cast(), size.max(1)) }.map_or(ptr::null_mut(), |p| p.cast());
+        }
+        // An over-aligned block cannot be resized in place: the heap would keep the block's alignment, not the address's.
+        let Ok(wanted) = core::alloc::Layout::from_size_align(size, layout.align()) else { return ptr::null_mut(); };
+        let fresh = unsafe { self.alloc(wanted) };
+        if !fresh.is_null() {
+            unsafe { ptr::copy_nonoverlapping(address, fresh, layout.size().min(size)); self.dealloc(address, layout); }
+        }
+        fresh
     }
 }
 #[global_allocator]

@@ -1,6 +1,7 @@
-# System facts, notifications, child processes and the terminal
+# System facts, notifications, child processes, the terminal, accounts and priorities
 
-Four capability groups follow `faults` in `dotnet_pal_api`. The boundary's System.Native
+Four capability groups follow `faults` in `dotnet_pal_api`, and `accounts` and `priority`
+close the table. The boundary's System.Native
 builds on them the environment as an enumeration and the facts behind `Environment` and
 `RuntimeInformation`, POSIX signal registrations and `Console.CancelKeyPress`,
 `System.Diagnostics.Process`, and the interactive console. A port implements each group as
@@ -12,6 +13,8 @@ one Rust trait, or leaves it absent.
 | `notifications` | `DOTNET_PAL_CAP_NOTIFICATIONS` | `port::Notifications` | `install`, `enable`, `disable`, `default_action` |
 | `processes` | `DOTNET_PAL_CAP_PROCESSES` | `port::Processes` | `spawn`, `wait`, `terminate`, `release`, `pipe_read`, `pipe_write`, `pipe_close` |
 | `terminal` | `DOTNET_PAL_CAP_TERMINAL` | `port::Terminal` | `window_size`, `set_input_mode`, `input_ready`, `control_character` |
+| `accounts` | `DOTNET_PAL_CAP_ACCOUNTS` | `port::Accounts` | `user_by_id`, `user_by_name`, `process_groups`, `user_groups` |
+| `priority` | `DOTNET_PAL_CAP_PRIORITY` | `port::Priority` | `get`, `set` |
 
 ## System facts
 
@@ -110,11 +113,44 @@ on or off as asked.
 
 `Console.ReadKey`, `Console.KeyAvailable`, `Console.WindowWidth` and
 `Console.TreatControlCAsInput` rest on these through `InitializeConsoleBeforeRead`,
-`StdinReady`, `GetWindowSize` and `SetSignalForBreak`. `TreatControlCAsInput` starts as
-false whatever the terminal was set to, because the group has no call that reads the
-state of the interrupt key. System.Native puts the terminal back into line mode with the
-interrupt key on when the process exits, so a program that ends while it reads keys does
-not leave its terminal without echo.
+`StdinReady`, `GetWindowSize` and `SetSignalForBreak`. System.Native owns the terminal the
+way the reference implementation does. The first read, or the first change of the break
+key, puts the terminal into raw mode, and there it stays, because the BCL edits and echoes
+lines itself. `StdinReady` asks in raw mode, since in line mode a typed key is no input
+until its line ends. The terminal goes back to line mode while a child process uses it, and
+for good when the process exits, so a program that ends while it reads keys does not leave
+its terminal without echo. From the moment the console is initialised, System.Native
+listens to `WINDOW_CHANGE` and `CONTINUE` whatever managed code registers for, because a
+resized window and a continued process invalidate what the console has cached.
+`TreatControlCAsInput` starts as false whatever the terminal was set to, because the group
+has no call that reads the state of the interrupt key.
+
+## Accounts
+
+`user_by_id` and `user_by_name` answer with one account of the target: its numeric user
+and primary group, its name, its home directory and its shell. `process_groups` lists the
+supplementary groups of this process, `user_groups` the groups an account belongs to.
+Both lists report their count and answer `BUFFER_TOO_SMALL` without a partial list when
+the buffer is shorter. An account that does not exist is `NOT_FOUND`, for the group list
+as well: the C library's `getgrouplist` answers for any name, so the providers look the
+account up first.
+
+System.Native builds `GetPwUidR`, `GetPwNamR`, `GetGroupList` and `GetGroups` on the
+group. The BCL uses them to start a child under a user name, to decide whether this
+process may execute a file, and to name the user at the other end of a named pipe.
+Without the group the two lookups still know the one user the process runs as, from the
+`system` group. Starting a child as another user is not carried: `spawn` has no
+credentials.
+
+## Priorities
+
+`get` and `set` read and change the scheduling priority of a process as a niceness from
+-20 (most favoured) to 19; process 0 is this process. A target with coarser classes maps
+them onto that range. `set` changes every thread of the process, which on Linux takes a
+walk through `/proc/<pid>/task`, because `setpriority` changes one thread there; when the
+kernel refuses some threads the others stay changed. Raising a priority is a privilege:
+root in a default Docker container lacks `CAP_SYS_NICE` and gets `ACCESS_DENIED`.
+`Process.PriorityClass` rests on the group through `GetPriority` and `SetPriority`.
 
 ## Module loading
 
@@ -124,22 +160,28 @@ A port without `Modules` loads nothing.
 
 ## Providers
 
-| Provider | `SystemInfo` | `Notifications` | `Processes` | `Terminal` |
-| --- | --- | --- | --- | --- |
-| Linux backend (`linux` feature) | `src/linux_system.rs` | `src/linux_notifications.rs`: signals through a self-pipe to a dispatcher thread | `src/linux_processes.rs`: `posix_spawn`, waits through a pidfd, or by polling where the kernel has none | `src/linux_terminal.rs`: termios |
-| Desktop `std` port | `std::env`, `libc` for the rest | the same design with `std::thread` | `std::process::Command` | termios through `libc` |
-| C host tables | `host-system` | `host-notifications` | `host-processes` | `host-terminal` |
-| Bare-metal example | machine name, uptime, image path | absent | absent | absent |
+| Provider | `SystemInfo` | `Notifications` | `Processes` | `Terminal` | `Accounts` and `Priority` |
+| --- | --- | --- | --- | --- | --- |
+| Linux backend (`linux` feature) | `src/linux_system.rs` | `src/linux_notifications.rs`: signals through a self-pipe to a dispatcher thread | `src/linux_processes.rs`: `posix_spawn`, waits through a pidfd, or by polling where the kernel has none | `src/linux_terminal.rs`: termios | `src/linux_accounts.rs`: `getpwuid_r`, `getpwnam_r`, `getgroups`, `getgrouplist`; `src/linux_priority.rs`: `getpriority`, `setpriority` per thread |
+| Desktop `std` port | `std::env`, `libc` for the rest | the same design with `std::thread` | `std::process::Command` | termios through `libc` | the same calls through `libc` on Unix; accounts absent on Windows, priority classes there |
+| C host tables | `host-system` | `host-notifications` | `host-processes` | `host-terminal` | `host-accounts` (every callback may be NULL), `host-priority` |
+| Bare-metal example | machine name, uptime, image path | absent | absent | absent | absent |
 
 The Linux processes provider sets the child's working directory with
 `posix_spawn_file_actions_addchdir_np`, which needs glibc 2.29 or musl 1.1.24 at link
 time.
 
-`scripts/system.sh`, `notifications.sh`, `processes.sh` and `terminal.sh` run the
+`scripts/system.sh`, `notifications.sh`, `processes.sh`, `terminal.sh`, `accounts.sh` and
+`priority.sh` run the
 conformance tests of the Linux providers and of independent C providers behind host
 tables: real signals sent to the process, real children with pipes, and a
-pseudo-terminal the test creates for itself. `samples/SystemProbe` is the managed
-counterpart; `scripts/system-probe.sh` runs it on Linux with the boundary's System.Native
+pseudo-terminal the test creates for itself. `samples/TerminalProbe` is `System.Console`
+on such a terminal: `scripts/terminal-probe.sh` sizes the window, starts the probe on
+the slave side, types what each step asks for (single keys, a key to be found by
+`KeyAvailable`, Ctrl+C as input and as `CancelKeyPress`, a line with a typing error and
+an erase), resizes the window, and checks afterwards that the terminal has its line
+mode, its echo and its interrupt key back. `samples/SystemProbe` is the managed
+counterpart of the other three groups; `scripts/system-probe.sh` runs it on Linux with the boundary's System.Native
 and the isolation gate, and `examples/baremetal-aarch64/build-app.sh SystemProbe` runs it
 with no OS, where links, modes, times, locks and the working directory work on the
 in-memory file system ([io](io.md)) and child processes, notifications and module loading

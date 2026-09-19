@@ -67,6 +67,12 @@ jobs:
         run: bash scripts/volumes.sh
       - name: Network interfaces, reverse lookup and multicast membership
         run: bash scripts/network.sh
+      - name: Unix domain sockets
+        run: bash scripts/local-sockets.sh
+      - name: Accounts and group lists
+        run: bash scripts/accounts.sh
+      - name: Process priorities
+        run: bash scripts/priority.sh
       - name: Native signal and activation contracts
         run: bash scripts/context.sh
       - name: Demand-allocated linear storage and eight-thread failure contracts
@@ -223,8 +229,10 @@ jobs:
         run: bash scripts/io-probe.sh
       - name: Processes, signal registrations, system facts, links and locks from C#
         run: bash scripts/system-probe.sh
-      - name: FileSystemWatcher, MemoryMappedFile, DriveInfo and NetworkInterface from C#
+      - name: FileSystemWatcher, MemoryMappedFile, DriveInfo, NetworkInterface and named pipes from C#
         run: bash scripts/facilities-probe.sh
+      - name: System.Console on a pseudo-terminal
+        run: bash scripts/terminal-probe.sh
       - name: System.Native ABI pin check
         run: DOTNET_PAL_RUNTIME_SOURCE=artifacts/runtime-source python3 -m unittest tests.test_system_native_abi
       - name: Freestanding C runtime self-test against glibc
@@ -258,6 +266,8 @@ jobs:
             artifacts/system-probe/dependency-inventory.log
             artifacts/facilities-probe/run.log
             artifacts/facilities-probe/dependency-inventory.log
+            artifacts/terminal-probe/run.log
+            artifacts/terminal-probe/dependency-inventory.log
             examples/baremetal-aarch64/artifacts/app-*/qemu.log
             examples/baremetal-aarch64/artifacts/app-*/app.map
           if-no-files-found: error

@@ -97,15 +97,15 @@ has the native heap, threads and low-level monitors, clocks, entropy, environmen
 error-code translation and diagnostics. `native/system_native_io.c` has the descriptor
 table, the standard streams, files and directories over the `files` group, change watching,
 file mappings and volumes. `native/system_native_net.c` has sockets, readiness events and
-name resolution over the `sockets` group, and network interfaces, reverse lookup and
-multicast membership over the `network` group. `native/system_native_sys.c` has the
-environment enumeration, OS, user and process facts, signal registrations over the
-`notifications` group, the terminal and module loading. `native/system_native_proc.c` has
+name resolution over the `sockets` group, network interfaces, reverse lookup and
+multicast membership over the `network` group, and Unix domain sockets over the
+`local_sockets` group. `native/system_native_sys.c` has the
+environment enumeration, OS, user and process facts, accounts, group lists and priorities,
+signal registrations over the `notifications` group, the terminal and module loading. `native/system_native_proc.c` has
 child processes and their pipes. [io](io.md), [system](system.md) and
 [facilities](facilities.md) describe the groups behind them. The facilities probe links 224
-entry points, all from these units. What the boundary does not carry (other users and
-groups, sessions, priorities, resource limits, Unix domain and raw sockets, control
-messages, network statistics and route tables, named shared memory) reports `ENOTSUP`,
+entry points, all from these units. What the boundary does not carry (sessions, resource limits, raw sockets, control
+messages, network change events, a child started as another user) reports `ENOTSUP`,
 `ENOENT` or `EAFNOSUPPORT`, so managed code sees an honest failure. Without the `files`
 group no path exists, and without the `sockets` group no address family does.
 `native/system_native_abi.h` pins the enumerations and structure layouts of the audited
@@ -116,8 +116,9 @@ when a checkout is available.
 and this System.Native in place of the SDK's, runs it, checks from the link map that
 every `SystemNative_*` symbol came from the boundary's objects, and audits the runtime,
 minipal and System.Native archives together with the gate. `scripts/io-probe.sh`,
-`scripts/system-probe.sh` and `scripts/facilities-probe.sh` do the same with
-`samples/IoProbe`, `samples/SystemProbe` and `samples/FacilitiesProbe`.
+`scripts/system-probe.sh`, `scripts/facilities-probe.sh` and `scripts/terminal-probe.sh` do
+the same with `samples/IoProbe`, `samples/SystemProbe`, `samples/FacilitiesProbe` and
+`samples/TerminalProbe`, the last on a pseudo-terminal.
 
 ## The freestanding C runtime
 
@@ -139,6 +140,6 @@ in-memory file system, null references that arrive as `NullReferenceException` t
 exception vector and the `faults` group, and the honest failure of socket creation. The
 system probe runs links, modes, times, locks and the working directory on that file system
 and sees processes, signal registrations and module loading fail as absent. The facilities
-probe reads the in-memory file system as a drive through `DriveInfo` and sees change
-watching, file mapping and network information fail as absent. The example's README lists
+probe watches and maps files of the in-memory file system, reads it as a drive through
+`DriveInfo`, and sees network information and local sockets fail as absent. The example's README lists
 what that machine provides and what it does not.

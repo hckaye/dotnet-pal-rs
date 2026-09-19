@@ -478,6 +478,8 @@ typedef struct { dotnet_pal_header header; dotnet_pal_files_ops ops; } dotnet_pa
 #define DOTNET_PAL_CAP_SOCKETS UINT64_C(268435456)
 #define DOTNET_PAL_FAMILY_IPV4 1u
 #define DOTNET_PAL_FAMILY_IPV6 2u
+/* A Unix domain socket: see the local_sockets group. Only create takes this family as an argument. */
+#define DOTNET_PAL_FAMILY_LOCAL 3u
 #define DOTNET_PAL_SOCKET_STREAM 1u
 #define DOTNET_PAL_SOCKET_DATAGRAM 2u
 #define DOTNET_PAL_SHUTDOWN_READ 1u
@@ -840,8 +842,9 @@ typedef struct { dotnet_pal_header header; dotnet_pal_volumes_ops ops; } dotnet_
  * reverse_lookup writes the host name of an address and follows
  * environment_get; NOT_FOUND when it has none, TIMEOUT when the answer could
  * not be obtained for now. membership joins (1) or leaves (0) a multicast
- * group on a datagram socket of the group's family; interface 0 lets the
- * target choose. Joining twice is ADDRESS_IN_USE, leaving a group the socket
+ * group on a datagram socket of the group's family, or an IPv4 group on an
+ * IPv6 socket that carries both families where the target can (INVALID_ARGUMENT
+ * where it cannot); interface 0 lets the target choose. Joining twice is ADDRESS_IN_USE, leaving a group the socket
  * is no member of ADDRESS_NOT_AVAILABLE, an interface that does not exist
  * NOT_FOUND; with interface 0 a target that has no route for the group
  * answers NOT_FOUND or ADDRESS_NOT_AVAILABLE. */
@@ -873,6 +876,75 @@ typedef struct {
 } dotnet_pal_network_ops;
 typedef struct { dotnet_pal_header header; dotnet_pal_network_ops ops; } dotnet_pal_host_network;
 
+/* Unix domain sockets (append-only group; it takes the handles of the sockets
+ * group, so one provider implements both). A local socket is created through
+ * sockets.create with DOTNET_PAL_FAMILY_LOCAL and STREAM or DATAGRAM, and
+ * every call of the sockets group works on it except those that take an
+ * address: accept, local_address and peer_address answer with the bare family,
+ * and send and receive work on a connected socket. bind gives the socket a
+ * path in the file system, which bind creates and nobody removes; connect
+ * follows sockets.connect (IN_PROGRESS on a non-blocking socket). address
+ * writes the path of the socket (peer = 0) or of its peer (peer = 1) and
+ * follows environment_get; a socket without a path is NOT_FOUND, and whether
+ * the path of a peer that has closed is still reported or is NOT_CONNECTED is
+ * the target's. peer_user is the numeric user the process at the other end of
+ * a connected stream socket ran as when it connected; a socket that is not
+ * connected is NOT_CONNECTED and a datagram socket UNSUPPORTED. A path longer
+ * than the target allows (107 bytes on Linux, 103 on macOS) is NAME_TOO_LONG.
+ * Names outside the file system (the abstract names of Linux) are not
+ * carried. */
+#define DOTNET_PAL_CAP_LOCAL_SOCKETS UINT64_C(274877906944)
+typedef struct { uint64_t bind_ok, connect_ok, address_ok, peer_ok, rejected_or_failed; } dotnet_pal_local_sockets_stats;
+typedef struct {
+    uint32_t (*bind)(void *socket, const uint8_t *path, size_t path_length);
+    uint32_t (*connect)(void *socket, const uint8_t *path, size_t path_length);
+    uint32_t (*address)(void *socket, uint32_t peer, uint8_t *out, size_t capacity, size_t *needed);
+    uint32_t (*peer_user)(void *socket, uint32_t *user_id);
+    uint32_t (*read_stats)(dotnet_pal_local_sockets_stats *out, size_t size);
+} dotnet_pal_local_sockets_ops;
+typedef struct { dotnet_pal_header header; dotnet_pal_local_sockets_ops ops; } dotnet_pal_host_local_sockets;
+
+/* Users and groups of the target (append-only group). user_by_id and
+ * user_by_name answer with one account: its numeric user and primary group,
+ * its name, its home directory and its shell (each empty when the target has
+ * none); NOT_FOUND when there is no such account. A name has 1 to
+ * DOTNET_PAL_MAX_ACCOUNT_NAME bytes. process_groups writes the supplementary
+ * groups of this process, user_groups the groups an account belongs to, the
+ * given primary group included (NOT_FOUND when there is no such account);
+ * both report the count they have in *count, at most DOTNET_PAL_MAX_GROUPS,
+ * and BUFFER_TOO_SMALL when capacity is less, writing nothing then. */
+#define DOTNET_PAL_CAP_ACCOUNTS UINT64_C(549755813888)
+#define DOTNET_PAL_MAX_ACCOUNT_NAME 255u
+#define DOTNET_PAL_MAX_GROUPS 65536u
+typedef struct { uint32_t user_id, group_id; uint8_t name[256]; uint8_t home[1024]; uint8_t shell[256]; } dotnet_pal_account;
+typedef struct { uint64_t user_ok, groups_ok, rejected_or_failed; } dotnet_pal_accounts_stats;
+typedef struct {
+    uint32_t (*user_by_id)(uint32_t user_id, dotnet_pal_account *out, size_t out_size);
+    uint32_t (*user_by_name)(const uint8_t *name, size_t name_length, dotnet_pal_account *out, size_t out_size);
+    uint32_t (*process_groups)(uint32_t *out, size_t capacity, size_t *count);
+    uint32_t (*user_groups)(const uint8_t *name, size_t name_length, uint32_t primary_group, uint32_t *out, size_t capacity, size_t *count);
+    uint32_t (*read_stats)(dotnet_pal_accounts_stats *out, size_t size);
+} dotnet_pal_accounts_ops;
+typedef struct { dotnet_pal_header header; dotnet_pal_accounts_ops ops; } dotnet_pal_host_accounts;
+
+/* Scheduling priority of a process (append-only group). process is an
+ * identifier as the processes group and the runtime group report them; 0 is
+ * this process. The value is a niceness: -20 (most favoured) to 19, 0 being
+ * what a process starts with. A target with coarser classes maps them onto
+ * that range and reports the value of the class it chose. set changes every
+ * thread of the process; when the target refuses some of them the others
+ * stay changed. NOT_FOUND when there is no such process, ACCESS_DENIED when
+ * this process may not change it (raising the priority is a privilege on
+ * most targets). */
+#define DOTNET_PAL_CAP_PRIORITY UINT64_C(1099511627776)
+typedef struct { uint64_t get_ok, set_ok, rejected_or_failed; } dotnet_pal_priority_stats;
+typedef struct {
+    uint32_t (*get)(uint64_t process, int32_t *value);
+    uint32_t (*set)(uint64_t process, int32_t value);
+    uint32_t (*read_stats)(dotnet_pal_priority_stats *out, size_t size);
+} dotnet_pal_priority_ops;
+typedef struct { dotnet_pal_header header; dotnet_pal_priority_ops ops; } dotnet_pal_host_priority;
+
 typedef struct {
     dotnet_pal_header header;
     dotnet_pal_vm_ops vm;
@@ -900,10 +972,16 @@ typedef struct {
     dotnet_pal_mappings_ops mappings;
     dotnet_pal_volumes_ops volumes;
     dotnet_pal_network_ops network;
+    dotnet_pal_local_sockets_ops local_sockets;
+    dotnet_pal_accounts_ops accounts;
+    dotnet_pal_priority_ops priority;
 } dotnet_pal_api;
 
 /* Use size checks BEFORE reading a capability group from a foreign table.
  * Each size marks the END of that group, not sizeof a future extended API. */
+#define DOTNET_PAL_PRIORITY_API_SIZE (offsetof(dotnet_pal_api, priority) + sizeof(dotnet_pal_priority_ops))
+#define DOTNET_PAL_ACCOUNTS_API_SIZE (offsetof(dotnet_pal_api, accounts) + sizeof(dotnet_pal_accounts_ops))
+#define DOTNET_PAL_LOCAL_SOCKETS_API_SIZE (offsetof(dotnet_pal_api, local_sockets) + sizeof(dotnet_pal_local_sockets_ops))
 #define DOTNET_PAL_NETWORK_API_SIZE (offsetof(dotnet_pal_api, network) + sizeof(dotnet_pal_network_ops))
 #define DOTNET_PAL_VOLUMES_API_SIZE (offsetof(dotnet_pal_api, volumes) + sizeof(dotnet_pal_volumes_ops))
 #define DOTNET_PAL_MAPPINGS_API_SIZE (offsetof(dotnet_pal_api, mappings) + sizeof(dotnet_pal_mappings_ops))
@@ -991,6 +1069,10 @@ const dotnet_pal_host_watches *dotnet_pal_host_watches_v2(void);
 const dotnet_pal_host_mappings *dotnet_pal_host_mappings_v2(void);
 const dotnet_pal_host_volumes *dotnet_pal_host_volumes_v2(void);
 const dotnet_pal_host_network *dotnet_pal_host_network_v2(void);
+/* Required only by host-local-sockets, host-accounts and host-priority respectively. */
+const dotnet_pal_host_local_sockets *dotnet_pal_host_local_sockets_v2(void);
+const dotnet_pal_host_accounts *dotnet_pal_host_accounts_v2(void);
+const dotnet_pal_host_priority *dotnet_pal_host_priority_v2(void);
 #if defined(__cplusplus)
 [[noreturn]] void dotnet_pal_host_abort(void);
 #else

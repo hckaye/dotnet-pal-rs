@@ -32,7 +32,31 @@ static sn_object *socket_of(intptr_t fd, const dotnet_pal_sockets_ops **ops, int
 
 /* ---- socket addresses ----------------------------------------------------------------- */
 #define ADDRESS_SIZE ((int32_t)sizeof(dotnet_pal_socket_address))
-static int32_t family_to_pal(uint16_t family) { return family == DOTNET_PAL_FAMILY_IPV4 ? AddressFamily_AF_INET : family == DOTNET_PAL_FAMILY_IPV6 ? AddressFamily_AF_INET6 : AddressFamily_AF_UNSPEC; }
+static int32_t family_to_pal(uint16_t family) {
+    return family == DOTNET_PAL_FAMILY_IPV4 ? AddressFamily_AF_INET : family == DOTNET_PAL_FAMILY_IPV6 ? AddressFamily_AF_INET6
+        : family == DOTNET_PAL_FAMILY_LOCAL ? AddressFamily_AF_UNIX : AddressFamily_AF_UNSPEC;
+}
+/* A Unix domain socket address is the family followed by the path, as GetDomainSocketSizes lays it out for the managed
+ * side: two bytes of family, then up to 108 bytes of path with its terminator. */
+#define LOCAL_PATH_OFFSET 2
+#define LOCAL_PATH_SIZE 108
+static bool is_local(const uint8_t *buffer, int32_t length) {
+    uint16_t family;
+    if (!buffer || length < LOCAL_PATH_OFFSET) return false;
+    memcpy(&family, buffer, sizeof family);
+    return family == DOTNET_PAL_FAMILY_LOCAL;
+}
+/* The path in a local address: what lies before the first terminator. Abstract names (a leading NUL) have no path. */
+static size_t local_path(const uint8_t *buffer, int32_t length, const uint8_t **path) {
+    *path = buffer + LOCAL_PATH_OFFSET;
+    return strnlen((const char*)*path, (size_t)(length - LOCAL_PATH_OFFSET));
+}
+static void store_local(uint8_t *buffer, int32_t *length) {
+    uint16_t family = DOTNET_PAL_FAMILY_LOCAL;
+    if (!buffer || !length || *length < LOCAL_PATH_OFFSET) { if (length) *length = 0; return; }
+    memcpy(buffer, &family, sizeof family);
+    *length = LOCAL_PATH_OFFSET; /* no path bytes: the managed side reads an address of this length as the unnamed one */
+}
 /* Managed buffers carry no alignment promise: addresses move through memcpy. */
 static bool load_address(const uint8_t *buffer, int32_t length, dotnet_pal_socket_address *out) {
     if (!buffer || length < ADDRESS_SIZE) return false;
@@ -40,6 +64,7 @@ static bool load_address(const uint8_t *buffer, int32_t length, dotnet_pal_socke
     return out->family == DOTNET_PAL_FAMILY_IPV4 || out->family == DOTNET_PAL_FAMILY_IPV6;
 }
 static void store_address(uint8_t *buffer, int32_t *length, const dotnet_pal_socket_address *address) {
+    if (address->family == DOTNET_PAL_FAMILY_LOCAL) { store_local(buffer, length); return; }
     if (!buffer || !length || *length < ADDRESS_SIZE) { if (length) *length = 0; return; }
     memcpy(buffer, address, sizeof *address);
     *length = address->family == 0 ? 0 : ADDRESS_SIZE;
@@ -59,7 +84,8 @@ PALEXPORT int32_t SystemNative_GetAddressFamily(const uint8_t* socketAddress, in
     return Error_SUCCESS;
 }
 PALEXPORT int32_t SystemNative_SetAddressFamily(uint8_t* socketAddress, int32_t socketAddressLen, int32_t addressFamily) {
-    uint16_t family = addressFamily == AddressFamily_AF_INET ? DOTNET_PAL_FAMILY_IPV4 : addressFamily == AddressFamily_AF_INET6 ? DOTNET_PAL_FAMILY_IPV6 : 0;
+    uint16_t family = addressFamily == AddressFamily_AF_INET ? DOTNET_PAL_FAMILY_IPV4 : addressFamily == AddressFamily_AF_INET6 ? DOTNET_PAL_FAMILY_IPV6
+        : addressFamily == AddressFamily_AF_UNIX ? DOTNET_PAL_FAMILY_LOCAL : 0;
     if (!socketAddress || socketAddressLen < (int32_t)sizeof family) return Error_EFAULT;
     if (family == 0 && addressFamily != AddressFamily_AF_UNSPEC) return Error_EAFNOSUPPORT;
     memcpy(socketAddress, &family, sizeof family);
@@ -121,11 +147,13 @@ PALEXPORT int32_t SystemNative_Socket(int32_t addressFamily, int32_t socketType,
     const dotnet_pal_sockets_ops *s = sn_sockets(); void *handle = NULL;
     if (!createdSocket) return Error_EFAULT;
     *createdSocket = -1;
-    uint32_t family = addressFamily == AddressFamily_AF_INET ? DOTNET_PAL_FAMILY_IPV4 : addressFamily == AddressFamily_AF_INET6 ? DOTNET_PAL_FAMILY_IPV6 : 0;
+    uint32_t family = addressFamily == AddressFamily_AF_INET ? DOTNET_PAL_FAMILY_IPV4 : addressFamily == AddressFamily_AF_INET6 ? DOTNET_PAL_FAMILY_IPV6
+        : addressFamily == AddressFamily_AF_UNIX && sn_local_sockets() ? DOTNET_PAL_FAMILY_LOCAL : 0;
     if (!s || family == 0) return Error_EAFNOSUPPORT; /* without the group no address family exists */
     uint32_t kind = socketType == SocketType_SOCK_STREAM ? DOTNET_PAL_SOCKET_STREAM : socketType == SocketType_SOCK_DGRAM ? DOTNET_PAL_SOCKET_DATAGRAM : 0;
     if (kind == 0) return Error_EPROTOTYPE;
-    int32_t natural = kind == DOTNET_PAL_SOCKET_STREAM ? ProtocolType_PT_TCP : ProtocolType_PT_UDP;
+    /* A local socket has no protocol to name. */
+    int32_t natural = family == DOTNET_PAL_FAMILY_LOCAL ? ProtocolType_PT_UNSPECIFIED : kind == DOTNET_PAL_SOCKET_STREAM ? ProtocolType_PT_TCP : ProtocolType_PT_UDP;
     if (protocolType != ProtocolType_PT_UNSPECIFIED && protocolType != natural) return Error_EPROTONOSUPPORT;
     uint32_t status = s->create(family, kind, &handle);
     if (status != DOTNET_PAL_OK) return status == DOTNET_PAL_UNSUPPORTED ? Error_EAFNOSUPPORT : net_error(status);
@@ -134,8 +162,22 @@ PALEXPORT int32_t SystemNative_Socket(int32_t addressFamily, int32_t socketType,
     *createdSocket = fd;
     return Error_SUCCESS;
 }
+/* Bind and connect of a local socket: the path goes to the local sockets group. */
+static int32_t local_call(intptr_t socket, const uint8_t *socketAddress, int32_t socketAddressLen, bool connect) {
+    const dotnet_pal_sockets_ops *s; const dotnet_pal_local_sockets_ops *l = sn_local_sockets(); int32_t error; const uint8_t *path;
+    size_t length = local_path(socketAddress, socketAddressLen, &path);
+    /* An empty path is an unnamed or an abstract address; neither names anything the group could reach. */
+    if (!l || length == 0) return Error_EAFNOSUPPORT;
+    sn_object *object = socket_of(socket, &s, &error);
+    if (!object) return error;
+    uint32_t status = connect ? l->connect(object->handle, path, length) : l->bind(object->handle, path, length);
+    if (connect && status == DOTNET_PAL_IN_PROGRESS) sn_socket_would_block(object, SocketEvents_SA_WRITE);
+    sn_unpin(object);
+    return net_error(status);
+}
 PALEXPORT int32_t SystemNative_Bind(intptr_t socket, int32_t protocolType, uint8_t* socketAddress, int32_t socketAddressLen) {
     const dotnet_pal_sockets_ops *s; int32_t error; dotnet_pal_socket_address address; (void)protocolType;
+    if (is_local(socketAddress, socketAddressLen)) return local_call(socket, socketAddress, socketAddressLen, false);
     if (!load_address(socketAddress, socketAddressLen, &address)) return Error_EAFNOSUPPORT;
     sn_object *object = socket_of(socket, &s, &error);
     if (!object) return error;
@@ -169,6 +211,7 @@ PALEXPORT int32_t SystemNative_Accept(intptr_t socket, uint8_t* socketAddress, i
 }
 PALEXPORT int32_t SystemNative_Connect(intptr_t socket, uint8_t* socketAddress, int32_t socketAddressLen) {
     const dotnet_pal_sockets_ops *s; int32_t error; dotnet_pal_socket_address address;
+    if (is_local(socketAddress, socketAddressLen)) return local_call(socket, socketAddress, socketAddressLen, true);
     if (!load_address(socketAddress, socketAddressLen, &address)) return Error_EAFNOSUPPORT;
     sn_object *object = socket_of(socket, &s, &error);
     if (!object) return error;
@@ -207,7 +250,17 @@ static int32_t endpoint(intptr_t socket, uint8_t* socketAddress, int32_t* socket
     sn_object *object = socket_of(socket, &s, &error);
     if (!object) return error;
     uint32_t status = (peer ? s->peer_address : s->local_address)(object->handle, &address);
-    if (status == DOTNET_PAL_OK) store_address(socketAddress, socketAddressLen, &address);
+    if (status == DOTNET_PAL_OK && address.family == DOTNET_PAL_FAMILY_LOCAL) {
+        /* The path follows the family; a socket without one keeps the bare family. */
+        const dotnet_pal_local_sockets_ops *l = sn_local_sockets(); size_t needed = 0; int32_t room = *socketAddressLen;
+        store_local(socketAddress, socketAddressLen);
+        if (l && room > LOCAL_PATH_OFFSET) {
+            size_t capacity = (size_t)(room - LOCAL_PATH_OFFSET) < LOCAL_PATH_SIZE ? (size_t)(room - LOCAL_PATH_OFFSET) : LOCAL_PATH_SIZE;
+            uint32_t named = l->address(object->handle, peer ? 1 : 0, socketAddress + LOCAL_PATH_OFFSET, capacity, &needed);
+            if (named == DOTNET_PAL_OK) *socketAddressLen = LOCAL_PATH_OFFSET + (int32_t)needed;
+            else if (named != DOTNET_PAL_NOT_FOUND) status = named;
+        }
+    } else if (status == DOTNET_PAL_OK) store_address(socketAddress, socketAddressLen, &address);
     sn_unpin(object);
     return net_error(status);
 }
@@ -221,7 +274,15 @@ PALEXPORT int32_t SystemNative_GetSocketType(intptr_t socket, int32_t* addressFa
     sn_unpin(object);
     return Error_SUCCESS;
 }
-PALEXPORT int32_t SystemNative_GetPeerID(intptr_t socket, uint32_t* euid) { (void)socket; (void)euid; return sn_fail(ENOTSUP); }
+PALEXPORT int32_t SystemNative_GetPeerID(intptr_t socket, uint32_t* euid) {
+    const dotnet_pal_local_sockets_ops *l = sn_local_sockets();
+    if (!euid) return sn_fail(EFAULT);
+    sn_object *object = sn_pin(socket, SN_SOCKET, ENOTSOCK);
+    if (!object) return -1;
+    uint32_t status = l ? l->peer_user(object->handle, euid) : DOTNET_PAL_UNSUPPORTED;
+    sn_unpin(object);
+    return sn_status(status);
+}
 
 /* ---- transfers ---------------------------------------------------------------------------------- */
 static bool receive_flags(int32_t flags, uint32_t *out) {

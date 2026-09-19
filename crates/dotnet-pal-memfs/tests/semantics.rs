@@ -1,12 +1,16 @@
-//! Every rule of the provider, called through the `Files` trait the way a front end
-//! calls it. The file system is one per process, so each test works under its own
+//! Every rule of the provider, called through the traits the way a front end calls
+//! them. The file system is one per process, so each test works under its own
 //! top-level directory. Tests that set or assert process-wide state (capacity, bytes
 //! in use, the clock, the yield, the working directory) run `alone()` and put it back;
-//! the others run `together()`.
-use dotnet_pal_memfs::{set_capacity, set_clock, set_yield, used_bytes, MemFs};
+//! the others run `together()`. The wait function of a reading watcher cannot be taken
+//! back once it is set, so every test that waits sets the same one, which keeps its
+//! books per thread; what a read does without one is in `tests/unhooked.rs`.
+use dotnet_pal_memfs::{set_capacity, set_clock, set_wait, set_yield, used_bytes, MemFs};
 use dotnet_pal_rs::files::{Status, CREATE, EXCLUSIVE, LOCK_EXCLUSIVE, LOCK_SHARED, LOCK_UNLOCK, NODE_DIRECTORY, NODE_FILE, NODE_SYMLINK, READ, TRUNCATE, WRITE};
-use dotnet_pal_rs::port::{Error, Files, Result};
-use std::{collections::HashSet, ffi::c_void, ptr, sync::{atomic::{AtomicU64, Ordering}, mpsc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard}, thread};
+use dotnet_pal_rs::port::{self, Error, Files, Mappings, Result};
+use dotnet_pal_rs::runtime::EXECUTE;
+use dotnet_pal_rs::watches::{self, Event, ACCESS, ATTRIBUTES, DELETE, DIRECTORY, FOREVER, MODIFY, MOVED_FROM, MOVED_TO, NO_FOLLOW, ONLY_DIRECTORY, OVERFLOW, REMOVED};
+use std::{cell::RefCell, collections::HashSet, ffi::c_void, ptr, sync::{atomic::{AtomicU64, Ordering}, mpsc, Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard}, thread};
 
 static WORLD: RwLock<()> = RwLock::new(());
 fn together() -> RwLockReadGuard<'static, ()> { WORLD.read().unwrap_or_else(PoisonError::into_inner) }
@@ -1291,4 +1295,789 @@ fn threads_work_on_their_own_files_in_one_directory() {
     for worker in workers { worker.join().unwrap(); }
     assert!(list("/threads").is_empty());
     assert_eq!(rmdir("/threads"), Ok(()));
+}
+
+// `Files` and `Watches` both have `open`, `close` and `remove`, so the calls of a watcher are spelled out here.
+const ALL: u32 = ACCESS | MODIFY | ATTRIBUTES | MOVED_FROM | MOVED_TO | watches::CREATE | DELETE;
+/// One event as the tests compare it: the watch, the kinds, the cookie and the name.
+type Seen = (u32, u32, u32, String);
+fn seen(watch: u32, events: u32, name: &str) -> Seen { (watch, events, 0, name.to_string()) }
+fn watcher() -> *mut c_void { <MemFs as port::Watches>::open().unwrap() }
+fn close_watcher(watcher: *mut c_void) { assert_eq!(unsafe { <MemFs as port::Watches>::close(watcher) }, Ok(())); }
+fn watch(watcher: *mut c_void, path: &str, events: u32) -> Result<u32> { unsafe { <MemFs as port::Watches>::add(watcher, path.as_bytes(), events) } }
+fn unwatch(watcher: *mut c_void, id: u32) -> Result<()> { unsafe { <MemFs as port::Watches>::remove(watcher, id) } }
+fn await_event(watcher: *mut c_void, timeout_ns: u64) -> Result<Seen> {
+    let mut event = Event::EMPTY;
+    unsafe { <MemFs as port::Watches>::read(watcher, timeout_ns, &mut event) }?;
+    assert!(event.name[event.name_length as usize..].iter().all(|byte| *byte == 0), "the name ends in zeros");
+    Ok((event.watch, event.events, event.cookie, String::from_utf8(event.name().to_vec()).unwrap()))
+}
+/// Everything that is queued now. Nothing is waited for: an event is queued by the call that causes it.
+fn queued(watcher: *mut c_void) -> Vec<Seen> {
+    let mut all = Vec::new();
+    loop {
+        match await_event(watcher, 0) {
+            Ok(event) => all.push(event),
+            Err(end) => { assert_eq!(end, Error::Timeout); return all; }
+        }
+    }
+}
+/// The two halves of a rename, which share a cookie that is not zero.
+fn moved(from: (u32, &str), to: (u32, &str), mark: u32, halves: &[Seen]) {
+    let cookie = halves[0].2;
+    assert_ne!(cookie, 0);
+    assert_eq!(halves, [(from.0, MOVED_FROM | mark, cookie, from.1.to_string()), (to.0, MOVED_TO | mark, cookie, to.1.to_string())]);
+}
+
+#[test]
+fn a_watched_directory_tells_what_happens_to_its_entries_in_order() {
+    let _world = together();
+    mkdir("/seen").unwrap();
+    mkdir("/unseen").unwrap();
+    let w = watcher();
+    let id = watch(w, "/seen", ALL).unwrap();
+    assert_ne!(id, 0);
+    assert_eq!(queued(w), []);
+    let file = open("/seen/f", READ | WRITE | CREATE).unwrap();
+    assert_eq!(write(file, 0, b"hello"), Ok(5));
+    assert_eq!(read(file, 0, 4).unwrap(), b"hell");
+    assert_eq!(chmod("/seen/f", 0o600), Ok(()));
+    assert_eq!(rename("/seen/f", "/seen/g"), Ok(()));
+    assert_eq!(remove("/seen/g"), Ok(()));
+    let all = queued(w);
+    assert_eq!(all[..4], [seen(id, watches::CREATE, "f"), seen(id, MODIFY, "f"), seen(id, ACCESS, "f"), seen(id, ATTRIBUTES, "f")]);
+    moved((id, "f"), (id, "g"), 0, &all[4..6]);
+    assert_eq!(all[6..], [seen(id, DELETE, "g")]);
+    // The file has no name left, so nothing tells of it any more.
+    assert_eq!(write(file, 0, b"unseen"), Ok(6));
+    close(file);
+    assert_eq!(queued(w), []);
+
+    // What changes nothing is no event: a write of nothing, a read at the end, the size and the times the file has.
+    let file = open("/seen/h", READ | WRITE | CREATE).unwrap();
+    assert_eq!(write(file, 0, b"abc"), Ok(3));
+    assert_eq!(write(file, 1, b""), Ok(0));
+    assert_eq!(read(file, 3, 8).unwrap(), b"");
+    assert_eq!(set_size(file, 3), Ok(()));
+    assert_eq!(utimes("/seen/h", true, None, None), Ok(()));
+    assert_eq!(unsafe { MemFs::set_file_times(file, None, None) }, Ok(()));
+    assert_eq!(queued(w), [seen(id, watches::CREATE, "h"), seen(id, MODIFY, "h")]);
+    assert_eq!(set_size(file, 1), Ok(()));
+    assert_eq!(set_size(file, 9), Ok(()));
+    assert_eq!(queued(w), [seen(id, MODIFY, "h"), seen(id, MODIFY, "h")]);
+    assert_eq!(unsafe { MemFs::set_file_mode(file, 0o640) }, Ok(()));
+    assert_eq!(utimes("/seen/h", true, Some(1), None), Ok(()));
+    assert_eq!(unsafe { MemFs::set_file_times(file, None, Some(2)) }, Ok(()));
+    assert_eq!(queued(w), [seen(id, ATTRIBUTES, "h"), seen(id, ATTRIBUTES, "h"), seen(id, ATTRIBUTES, "h")]);
+    close(open("/seen/h", WRITE | TRUNCATE).unwrap());
+    close(open("/seen/h", WRITE | TRUNCATE).unwrap());
+    assert_eq!(queued(w), [seen(id, MODIFY, "h")], "truncating an empty file changes nothing");
+    close(file);
+
+    // Directories carry their mark, and what happens inside them is theirs to tell.
+    assert_eq!(mkdir("/seen/d"), Ok(()));
+    assert_eq!(chmod("/seen/d", 0o700), Ok(()));
+    put("/seen/d/inner", b"x");
+    assert_eq!(remove("/seen/d/inner"), Ok(()));
+    assert_eq!(rename("/seen/d", "/seen/e"), Ok(()));
+    assert_eq!(rmdir("/seen/e"), Ok(()));
+    let all = queued(w);
+    assert_eq!(all[..2], [seen(id, watches::CREATE | DIRECTORY, "d"), seen(id, ATTRIBUTES | DIRECTORY, "d")]);
+    moved((id, "d"), (id, "e"), DIRECTORY, &all[2..4]);
+    assert_eq!(all[4..], [seen(id, DELETE | DIRECTORY, "e")]);
+
+    // A link is an entry like any other; a call that follows it changes what it leads to.
+    assert_eq!(symlink("h", "/seen/l"), Ok(()));
+    assert_eq!(utimes("/seen/l", false, Some(1), Some(1)), Ok(()));
+    assert_eq!(chmod("/seen/l", 0o600), Ok(()));
+    assert_eq!(remove("/seen/l"), Ok(()));
+    assert_eq!(queued(w), [seen(id, watches::CREATE, "l"), seen(id, ATTRIBUTES, "l"), seen(id, ATTRIBUTES, "h"), seen(id, DELETE, "l")]);
+
+    // A rename into or out of the directory is the half that happens there.
+    put("/unseen/x", b"x");
+    assert_eq!(rename("/unseen/x", "/seen/x"), Ok(()));
+    assert_eq!(rename("/seen/x", "/unseen/y"), Ok(()));
+    let all = queued(w);
+    assert_eq!(all.iter().map(|(watch, events, _, name)| (*watch, *events, name.as_str())).collect::<Vec<_>>(), [(id, MOVED_TO, "x"), (id, MOVED_FROM, "x")]);
+    assert!(all[0].2 != 0 && all[1].2 != 0 && all[0].2 != all[1].2);
+    close_watcher(w);
+}
+
+#[test]
+fn a_watch_hears_only_the_kinds_it_asked_for() {
+    let _world = together();
+    mkdir("/asked").unwrap();
+    let w = watcher();
+    let id = watch(w, "/asked", watches::CREATE | DELETE).unwrap();
+    put("/asked/g", b"data");
+    assert_eq!(chmod("/asked/g", 0o600), Ok(()));
+    assert_eq!(rename("/asked/g", "/asked/h"), Ok(()));
+    assert_eq!(get("/asked/h"), b"data");
+    assert_eq!(remove("/asked/h"), Ok(()));
+    assert_eq!(queued(w), [seen(id, watches::CREATE, "g"), seen(id, DELETE, "h")]);
+    // Watching the node again, by whatever path, keeps the id and replaces the kinds.
+    assert_eq!(symlink("/asked", "/asked-link"), Ok(()));
+    assert_eq!(watch(w, "/asked-link/../asked/", MODIFY | MOVED_TO | ONLY_DIRECTORY), Ok(id));
+    put("/asked/i", b"data");
+    assert_eq!(rename("/asked/i", "/asked/j"), Ok(()));
+    assert_eq!(remove("/asked/j"), Ok(()));
+    let all = queued(w);
+    assert_eq!(all.iter().map(|(watch, events, _, name)| (*watch, *events, name.as_str())).collect::<Vec<_>>(), [(id, MODIFY, "i"), (id, MOVED_TO, "j")]);
+    assert_ne!(all[1].2, 0);
+    close_watcher(w);
+}
+
+#[test]
+fn add_names_a_node_and_refuses_what_it_cannot_watch() {
+    let _world = together();
+    mkdir("/adds").unwrap();
+    put("/adds/f", b"x");
+    symlink("f", "/adds/to-file").unwrap();
+    symlink("/adds", "/adds/to-dir").unwrap();
+    symlink("nowhere", "/adds/dangling").unwrap();
+    let w = watcher();
+    assert_eq!(watch(w, "/adds/missing", ALL), Err(Error::NotFound));
+    assert_eq!(watch(w, "/adds/dangling", ALL), Err(Error::NotFound));
+    assert_eq!(watch(w, "/adds/f/x", ALL), Err(Error::NotDirectory));
+    assert_eq!(watch(w, &format!("/adds/{}", "n".repeat(256)), ALL), Err(Error::NameTooLong));
+    assert_eq!(watch(w, "/adds/f", ALL | ONLY_DIRECTORY), Err(Error::NotDirectory));
+    assert_eq!(watch(w, "/adds/to-file", ALL | ONLY_DIRECTORY), Err(Error::NotDirectory));
+    assert_eq!(watch(w, "/adds/to-dir", ALL | ONLY_DIRECTORY | NO_FOLLOW), Err(Error::NotDirectory));
+    for nothing in [0, ONLY_DIRECTORY, NO_FOLLOW, OVERFLOW | REMOVED | DIRECTORY] { assert_eq!(watch(w, "/adds", nothing), Err(Error::InvalidArgument)); }
+    // A refusal uses no id. Ids count from 1, a node keeps the one it has, and a link that is followed is its target.
+    let directory = watch(w, "/adds", ALL | ONLY_DIRECTORY).unwrap();
+    assert_eq!(watch(w, "/adds/to-dir", ALL | ONLY_DIRECTORY), Ok(directory));
+    let file = watch(w, "/adds/f", ALL).unwrap();
+    assert_eq!(watch(w, "/adds/to-file", ALL), Ok(file));
+    let link = watch(w, "/adds/to-file", ALL | NO_FOLLOW).unwrap();
+    let dangling = watch(w, "/adds/dangling", ALL | NO_FOLLOW).unwrap();
+    assert_eq!([directory, file, link, dangling], [1, 2, 3, 4]);
+    let other = watcher();
+    assert_eq!(watch(other, "/adds/f", MODIFY), Ok(1), "ids are the watcher's own");
+    // The link and its target are two nodes.
+    assert_eq!(utimes("/adds/to-file", false, Some(5), Some(6)), Ok(()));
+    assert_eq!(chmod("/adds/to-file", 0o600), Ok(()));
+    assert_eq!(queued(w), [seen(directory, ATTRIBUTES, "to-file"), seen(link, ATTRIBUTES, ""), seen(directory, ATTRIBUTES, "f"), seen(file, ATTRIBUTES, "")]);
+    assert_eq!(queued(other), []);
+
+    // A handle of another kind is refused by every call and stays what it is.
+    let handle = open("/adds/f", READ).unwrap();
+    let listing = opendir("/adds").unwrap();
+    for wrong in [handle, listing, ptr::null_mut()] {
+        assert_eq!(watch(wrong, "/adds", ALL), Err(Error::InvalidArgument));
+        assert_eq!(unwatch(wrong, 1), Err(Error::InvalidArgument));
+        assert_eq!(await_event(wrong, 0), Err(Error::InvalidArgument));
+        assert_eq!(unsafe { <MemFs as port::Watches>::close(wrong) }, Err(Error::InvalidArgument));
+    }
+    assert_eq!(unsafe { <MemFs as Files>::close(w) }, Err(Error::InvalidArgument));
+    assert_eq!(unsafe { MemFs::close_directory(w) }, Err(Error::InvalidArgument));
+    assert_eq!(unsafe { MemFs::status(w) }.err(), Some(Error::InvalidArgument));
+    assert_eq!(map(w, 0, PAGE, MAP_READ, true), Err(Error::InvalidArgument));
+    assert_eq!(read(handle, 0, 8).unwrap(), b"x");
+    assert_eq!(queued(w), [seen(directory, ACCESS, "f"), seen(file, ACCESS, "")]);
+    close(handle);
+    closedir(listing);
+    close_watcher(other);
+    close_watcher(w);
+}
+
+#[test]
+fn a_rename_is_two_events_with_one_cookie() {
+    let _world = together();
+    mkdir("/ra").unwrap();
+    mkdir("/rb").unwrap();
+    put("/ra/f", b"x");
+    let (w, only_b) = (watcher(), watcher());
+    let (a, b) = (watch(w, "/ra", ALL).unwrap(), watch(w, "/rb", ALL).unwrap());
+    let theirs = watch(only_b, "/rb", ALL).unwrap();
+    assert_eq!(rename("/ra/f", "/rb/g"), Ok(()));
+    let first = queued(w);
+    moved((a, "f"), (b, "g"), 0, &first);
+    assert_eq!(queued(only_b), [(theirs, MOVED_TO, first[0].2, "g".to_string())], "every watcher hears the same cookie");
+    assert_eq!(rename("/rb/g", "/rb/h"), Ok(()));
+    let second = queued(w);
+    moved((b, "g"), (b, "h"), 0, &second);
+    assert_ne!(first[0].2, second[0].2, "every rename has a cookie of its own");
+    assert_eq!(queued(only_b).len(), 2);
+    // A rename that does nothing tells nothing.
+    assert_eq!(rename("/rb/h", "/rb/h"), Ok(()));
+    assert_eq!(rename("/rb/missing", "/rb/h"), Err(Error::NotFound));
+    assert_eq!(queued(w), []);
+
+    // As with inotify, a destination that is replaced is no DELETE: its own watch hears of its link count and ends.
+    put("/ra/new", b"new");
+    let replaced = watch(w, "/rb/h", ALL).unwrap();
+    assert_eq!(queued(w), [seen(a, watches::CREATE, "new"), seen(a, MODIFY, "new")]);
+    assert_eq!(rename("/ra/new", "/rb/h"), Ok(()));
+    let all = queued(w);
+    moved((a, "new"), (b, "h"), 0, &all[..2]);
+    assert_eq!(all[2..], [seen(replaced, ATTRIBUTES, ""), (replaced, REMOVED, 0, String::new())]);
+    assert_eq!(get("/rb/h"), b"new");
+    // A replaced file that has another name stays watched, and tells of its link count under that name too.
+    put("/ra/kept", b"kept");
+    link("/ra/kept", "/ra/too").unwrap();
+    put("/ra/over", b"over");
+    let kept = watch(w, "/ra/kept", ALL).unwrap();
+    queued(w);
+    assert_eq!(rename("/ra/over", "/ra/kept"), Ok(()));
+    let all = queued(w);
+    moved((a, "over"), (a, "kept"), 0, &all[..2]);
+    assert_eq!(all[2..], [seen(a, ATTRIBUTES, "too"), seen(kept, ATTRIBUTES, "")]);
+    assert_eq!(get("/ra/too"), b"kept");
+
+    // An empty directory that is replaced ends the same way.
+    mkdir("/ra/d").unwrap();
+    mkdir("/rb/e").unwrap();
+    let gone = watch(w, "/rb/e", ALL).unwrap();
+    queued(w);
+    assert_eq!(rename("/ra/d", "/rb/e"), Ok(()));
+    let all = queued(w);
+    moved((a, "d"), (b, "e"), DIRECTORY, &all[..2]);
+    assert_eq!(all[2..], [seen(gone, ATTRIBUTES | DIRECTORY, ""), (gone, REMOVED, 0, String::new())]);
+    // A rename that is refused tells nothing.
+    put("/rb/e/inside", b"x");
+    mkdir("/ra/d2").unwrap();
+    queued(w);
+    assert_eq!(rename("/ra/d2", "/rb/e"), Err(Error::NotEmpty));
+    assert_eq!(queued(w), []);
+    close_watcher(only_b);
+    close_watcher(w);
+}
+
+#[test]
+fn a_file_with_several_names_reports_under_each() {
+    let _world = together();
+    for directory in ["/names1", "/names2", "/names3"] { mkdir(directory).unwrap(); }
+    let w = watcher();
+    let (first, second) = (watch(w, "/names1", ALL).unwrap(), watch(w, "/names2", ALL).unwrap());
+    let file = open("/names1/a", READ | WRITE | CREATE).unwrap();
+    assert_eq!(queued(w), [seen(first, watches::CREATE, "a")]);
+    // A new name is a change of the link count, told under the names the file had, and then a CREATE.
+    assert_eq!(link("/names1/a", "/names1/b"), Ok(()));
+    assert_eq!(queued(w), [seen(first, ATTRIBUTES, "a"), seen(first, watches::CREATE, "b")]);
+    assert_eq!(link("/names1/b", "/names2/c"), Ok(()));
+    assert_eq!(queued(w), [seen(first, ATTRIBUTES, "a"), seen(first, ATTRIBUTES, "b"), seen(second, watches::CREATE, "c")]);
+    assert_eq!(link("/names2/c", "/names3/d"), Ok(()));
+    let under_each = |kinds: u32| [seen(first, kinds, "a"), seen(first, kinds, "b"), seen(second, kinds, "c")];
+    assert_eq!(queued(w), under_each(ATTRIBUTES));
+    assert_eq!(write(file, 0, b"data"), Ok(4));
+    assert_eq!(queued(w), under_each(MODIFY));
+    assert_eq!(read(file, 0, 4).unwrap(), b"data");
+    assert_eq!(queued(w), under_each(ACCESS));
+    assert_eq!(chmod("/names3/d", 0o600), Ok(()));
+    assert_eq!(queued(w), under_each(ATTRIBUTES));
+    // Two names of one file: the rename does nothing and tells nothing.
+    assert_eq!(rename("/names1/b", "/names2/c"), Ok(()));
+    assert_eq!(queued(w), []);
+    // A name that goes is a change of the link count under the names that stay, and then a DELETE.
+    assert_eq!(remove("/names1/a"), Ok(()));
+    assert_eq!(queued(w), [seen(first, ATTRIBUTES, "b"), seen(second, ATTRIBUTES, "c"), seen(first, DELETE, "a")]);
+    assert_eq!(remove("/names3/d"), Ok(()));
+    assert_eq!(queued(w), [seen(first, ATTRIBUTES, "b"), seen(second, ATTRIBUTES, "c")]);
+    assert_eq!(remove("/names1/b"), Ok(()));
+    assert_eq!(queued(w), [seen(second, ATTRIBUTES, "c"), seen(first, DELETE, "b")]);
+    assert_eq!(remove("/names2/c"), Ok(()));
+    assert_eq!(queued(w), [seen(second, DELETE, "c")]);
+    assert_eq!(write(file, 0, b"gone"), Ok(4));
+    assert_eq!(queued(w), []);
+    close(file);
+    close_watcher(w);
+}
+
+#[test]
+fn a_watched_node_reports_without_a_name_until_it_is_gone() {
+    let _world = together();
+    mkdir("/own").unwrap();
+    put("/own/f", b"data");
+    let w = watcher();
+    // The file is watched first: the order of the events is not the order of the ids.
+    let (own, directory) = (watch(w, "/own/f", ALL).unwrap(), watch(w, "/own", ALL).unwrap());
+    let file = open("/own/f", READ | WRITE).unwrap();
+    assert_eq!(write(file, 4, b"more"), Ok(4));
+    assert_eq!(read(file, 0, 2).unwrap(), b"da");
+    assert_eq!(chmod("/own/f", 0o600), Ok(()));
+    assert_eq!(queued(w), [seen(directory, MODIFY, "f"), seen(own, MODIFY, ""), seen(directory, ACCESS, "f"), seen(own, ACCESS, ""),
+        seen(directory, ATTRIBUTES, "f"), seen(own, ATTRIBUTES, "")]);
+    assert_eq!(link("/own/f", "/own/g"), Ok(()));
+    assert_eq!(queued(w), [seen(directory, ATTRIBUTES, "f"), seen(own, ATTRIBUTES, ""), seen(directory, watches::CREATE, "g")]);
+    // The watch is of the node, not of the name it was made with.
+    assert_eq!(remove("/own/f"), Ok(()));
+    assert_eq!(queued(w), [seen(directory, ATTRIBUTES, "g"), seen(own, ATTRIBUTES, ""), seen(directory, DELETE, "f")]);
+    assert_eq!(rename("/own/g", "/own/h"), Ok(()));
+    assert_eq!(queued(w).len(), 2);
+    // With the last name the watch ends, handles or not, and in the order of inotify its end comes before the DELETE.
+    assert_eq!(remove("/own/h"), Ok(()));
+    assert_eq!(queued(w), [seen(own, ATTRIBUTES, ""), (own, REMOVED, 0, String::new()), seen(directory, DELETE, "h")]);
+    assert_eq!(write(file, 0, b"late"), Ok(4));
+    assert_eq!(unsafe { MemFs::set_file_mode(file, 0o644) }, Ok(()));
+    assert_eq!(queued(w), []);
+    assert_eq!(unwatch(w, own), Err(Error::InvalidArgument), "the watch has ended");
+    close(file);
+
+    // A directory tells of its entries and of itself, and ends when it is removed, without a word on its link count.
+    mkdir("/own/d").unwrap();
+    let inner = watch(w, "/own/d", ALL).unwrap();
+    assert_eq!(inner, directory + 1);
+    assert_eq!(chmod("/own/d", 0o700), Ok(()));
+    put("/own/d/x", b"x");
+    assert_eq!(remove("/own/d/x"), Ok(()));
+    assert_eq!(rmdir("/own/d"), Ok(()));
+    assert_eq!(queued(w), [seen(directory, watches::CREATE | DIRECTORY, "d"), seen(directory, ATTRIBUTES | DIRECTORY, "d"), seen(inner, ATTRIBUTES | DIRECTORY, ""),
+        seen(inner, watches::CREATE, "x"), seen(inner, MODIFY, "x"), seen(inner, DELETE, "x"), (inner, REMOVED, 0, String::new()), seen(directory, DELETE | DIRECTORY, "d")]);
+    close_watcher(w);
+}
+
+#[test]
+fn remove_ends_a_watch_and_says_so() {
+    let _world = together();
+    mkdir("/ends").unwrap();
+    let w = watcher();
+    let id = watch(w, "/ends", watches::CREATE).unwrap();
+    put("/ends/f", b"x");
+    assert_eq!(unwatch(w, id), Ok(()));
+    put("/ends/g", b"x");
+    // What was queued before the end stays, REMOVED comes whatever the watch asked for, and nothing follows it.
+    assert_eq!(queued(w), [seen(id, watches::CREATE, "f"), (id, REMOVED, 0, String::new())]);
+    for unknown in [id, 0, id + 1, u32::MAX] { assert_eq!(unwatch(w, unknown), Err(Error::InvalidArgument)); }
+    assert_eq!(queued(w), []);
+    // The node can be watched again, under an id that was not used before.
+    assert_eq!(watch(w, "/ends", ALL), Ok(id + 1));
+    assert_eq!(remove("/ends/g"), Ok(()));
+    assert_eq!(queued(w), [seen(id + 1, DELETE, "g")]);
+    // A watcher that closes with watches and events takes them along.
+    put("/ends/h", b"x");
+    close_watcher(w);
+    assert_eq!(remove("/ends/h"), Ok(()));
+}
+
+#[test]
+fn a_watch_follows_its_directory_through_a_rename() {
+    let _world = together();
+    for directory in ["/follows", "/follows/d", "/follows/other"] { mkdir(directory).unwrap(); }
+    let w = watcher();
+    let id = watch(w, "/follows/d", ALL).unwrap();
+    assert_eq!(rename("/follows/d", "/follows/other/e"), Ok(()));
+    put("/follows/other/e/f", b"x");
+    assert_eq!(queued(w), [seen(id, watches::CREATE, "f"), seen(id, MODIFY, "f")]);
+    // The path the watch was made with names another node now.
+    mkdir("/follows/d").unwrap();
+    put("/follows/d/g", b"x");
+    assert_eq!(queued(w), []);
+    assert_eq!(watch(w, "/follows/other/e", ALL), Ok(id));
+    assert_eq!(watch(w, "/follows/d", ALL), Ok(id + 1));
+    close_watcher(w);
+}
+
+#[test]
+fn a_full_queue_drops_what_comes_and_says_so_once() {
+    const LIMIT: usize = 1024;
+    let _world = together();
+    mkdir("/full").unwrap();
+    put("/full/f", b"x");
+    let w = watcher();
+    let id = watch(w, "/full", ATTRIBUTES | DELETE).unwrap();
+    for round in 0..LIMIT + 10 { chmod("/full/f", 0o600 | (round as u32 & 7)).unwrap(); }
+    // The report of the loss takes a place in the queue, so two events have to go before there is room again.
+    assert_eq!(await_event(w, 0), Ok(seen(id, ATTRIBUTES, "f")));
+    assert_eq!(chmod("/full/f", 0o644), Ok(()));
+    assert_eq!(await_event(w, 0), Ok(seen(id, ATTRIBUTES, "f")));
+    assert_eq!(remove("/full/f"), Ok(()));
+    let rest = queued(w);
+    assert_eq!(rest.len(), LIMIT);
+    assert!(rest[..LIMIT - 2].iter().all(|event| *event == seen(id, ATTRIBUTES, "f")));
+    assert_eq!(rest[LIMIT - 2..], [(0, OVERFLOW, 0, String::new()), seen(id, DELETE, "f")]);
+    // The next loss is told again. REMOVED is an event like the others and can be the one that is lost.
+    put("/full/f", b"x");
+    for round in 0..LIMIT { chmod("/full/f", 0o600 | (round as u32 & 7)).unwrap(); }
+    assert_eq!(unwatch(w, id), Ok(()));
+    let rest = queued(w);
+    assert_eq!(rest.len(), LIMIT + 1);
+    assert_eq!(rest[LIMIT], (0, OVERFLOW, 0, String::new()));
+    assert_eq!(unwatch(w, id), Err(Error::InvalidArgument));
+    // A name that an event cannot carry is an event the consumer did not get. The table lets no such name in.
+    let id = watch(w, "/full", watches::CREATE | DELETE).unwrap();
+    put("/full/nul\0name", b"x");
+    assert_eq!(remove("/full/f"), Ok(()));
+    assert_eq!(queued(w), [(0, OVERFLOW, 0, String::new()), seen(id, DELETE, "f")]);
+    close_watcher(w);
+}
+
+thread_local! {
+    /// What the reads of this thread asked the wait function for.
+    static ASKED: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+    /// Counts the calls of the wait function on this thread for the test that started it.
+    static WAITING: RefCell<Option<Arc<AtomicU64>>> = const { RefCell::new(None) };
+}
+fn wait(ns: u64) {
+    ASKED.with(|asked| asked.borrow_mut().push(ns));
+    WAITING.with(|waiting| if let Some(count) = &*waiting.borrow() { count.fetch_add(1, Ordering::SeqCst); });
+    thread::yield_now();
+}
+struct Sent(*mut c_void);
+// SAFETY: a watcher is read by one thread while others add and remove, which is what the tests below do.
+unsafe impl Send for Sent {}
+impl Sent { fn handle(&self) -> *mut c_void { self.0 } }
+/// Reads on a thread of its own, which hands back the event and what it asked the wait function for. Returns once
+/// that thread waits: whatever the caller does next happens beside a read that found nothing.
+fn reader(watcher: *mut c_void, timeout_ns: u64) -> thread::JoinHandle<(Result<Seen>, Vec<u64>)> {
+    set_wait(wait);
+    let (sent, waits) = (Sent(watcher), Arc::new(AtomicU64::new(0)));
+    let reader = thread::spawn({
+        let waits = waits.clone();
+        move || {
+            WAITING.with(|waiting| *waiting.borrow_mut() = Some(waits));
+            (await_event(sent.handle(), timeout_ns), ASKED.with(|asked| asked.take()))
+        }
+    });
+    while waits.load(Ordering::SeqCst) == 0 { thread::yield_now(); }
+    reader
+}
+
+#[test]
+fn a_read_waits_for_the_event_another_thread_causes() {
+    let _world = together();
+    mkdir("/waits").unwrap();
+    let w = watcher();
+    let id = watch(w, "/waits", ALL).unwrap();
+    let waiting = reader(w, FOREVER);
+    put("/waits/f", b"x");
+    let (event, asked) = waiting.join().unwrap();
+    assert_eq!(event, Ok(seen(id, watches::CREATE, "f")));
+    assert!(!asked.is_empty() && asked.iter().all(|ns| *ns == 10_000_000), "{asked:?}");
+    assert_eq!(queued(w), [seen(id, MODIFY, "f")]);
+    // A watch added beside a read that waits reports to it.
+    let waiting = reader(w, 3_600_000_000_000);
+    let file = watch(w, "/waits/f", ATTRIBUTES).unwrap();
+    assert_eq!(unwatch(w, id), Ok(()));
+    let (event, asked) = waiting.join().unwrap();
+    assert_eq!(event, Ok((id, REMOVED, 0, String::new())));
+    assert!(!asked.is_empty() && asked.iter().all(|ns| *ns == 10_000_000), "{asked:?}");
+    let waiting = reader(w, 3_600_000_000_000);
+    assert_eq!(chmod("/waits/f", 0o600), Ok(()));
+    assert_eq!(waiting.join().unwrap().0, Ok(seen(file, ATTRIBUTES, "")));
+    close_watcher(w);
+}
+
+#[test]
+fn a_timed_read_ends_when_it_has_asked_the_wait_function_for_its_time() {
+    let _world = together();
+    set_wait(wait);
+    mkdir("/timed").unwrap();
+    let w = watcher();
+    let id = watch(w, "/timed", watches::CREATE).unwrap();
+    let expire = |timeout_ns: u64| {
+        ASKED.with(|asked| asked.borrow_mut().clear());
+        (await_event(w, timeout_ns), ASKED.with(|asked| asked.take()))
+    };
+    assert_eq!(expire(0), (Err(Error::Timeout), vec![]));
+    assert_eq!(expire(1), (Err(Error::Timeout), vec![1]));
+    assert_eq!(expire(10_000_000), (Err(Error::Timeout), vec![10_000_000]));
+    assert_eq!(expire(25_000_000), (Err(Error::Timeout), vec![10_000_000, 10_000_000, 5_000_000]));
+    // An event that is there is taken without a wait, whatever the timeout.
+    put("/timed/f", b"x");
+    assert_eq!(expire(25_000_000), (Ok(seen(id, watches::CREATE, "f")), vec![]));
+    close_watcher(w);
+}
+
+#[test]
+fn remove_releases_a_reader_that_waits_forever() {
+    let _world = together();
+    mkdir("/released").unwrap();
+    let w = watcher();
+    let id = watch(w, "/released", ALL).unwrap();
+    let waiting = reader(w, FOREVER);
+    assert_eq!(unwatch(w, id), Ok(()));
+    let (event, asked) = waiting.join().unwrap();
+    assert_eq!(event, Ok((id, REMOVED, 0, String::new())));
+    assert!(!asked.is_empty());
+    close_watcher(w);
+}
+
+const PAGE: usize = 4096;
+const MAP_READ: u32 = dotnet_pal_rs::runtime::READ;
+const MAP_WRITE: u32 = dotnet_pal_rs::runtime::WRITE;
+fn map(file: *mut c_void, offset: u64, length: usize, access: u32, shared: bool) -> Result<*mut u8> { unsafe { MemFs::map(file, offset, length, access, shared) } }
+fn unmap(address: *mut u8, length: usize) -> Result<()> { unsafe { MemFs::unmap(address, length) } }
+fn sync(address: *mut u8, length: usize) -> Result<()> { unsafe { MemFs::sync(address, length) } }
+/// Mapped bytes are read and written the way a consumer does it: through the pointer, never through a reference.
+fn peek(address: *mut u8, offset: usize, length: usize) -> Vec<u8> {
+    let mut out = vec![0xee; length];
+    unsafe { ptr::copy_nonoverlapping(address.add(offset), out.as_mut_ptr(), length) };
+    out
+}
+fn poke(address: *mut u8, offset: usize, data: &[u8]) { unsafe { ptr::copy_nonoverlapping(data.as_ptr(), address.add(offset), data.len()) } }
+fn pattern(length: usize) -> Vec<u8> { (0..length).map(|index| (index % 251) as u8 + 1).collect() }
+
+#[test]
+fn a_shared_mapping_is_the_bytes_of_the_file() {
+    let _world = together();
+    mkdir("/shared").unwrap();
+    let bytes = pattern(5000);
+    put("/shared/f", &bytes);
+    let file = open("/shared/f", READ | WRITE).unwrap();
+    let whole = map(file, 0, 2 * PAGE, MAP_READ | MAP_WRITE, true).unwrap();
+    let second = map(file, PAGE as u64, PAGE, MAP_READ, true).unwrap();
+    assert!(whole.addr().is_multiple_of(PAGE) && second.addr().is_multiple_of(PAGE));
+    assert_eq!(peek(whole, 0, 5000), bytes);
+    assert_eq!(peek(second, 0, 5000 - PAGE), bytes[PAGE..]);
+    // A write to the file is in both mappings at once.
+    assert_eq!(write(file, 4090, b"0123456789"), Ok(10));
+    assert_eq!((peek(whole, 4090, 10), peek(second, 0, 4)), (b"0123456789".to_vec(), b"6789".to_vec()));
+    // A write through one mapping is in the file and in the other mapping at once.
+    poke(second, 2, b"XY");
+    assert_eq!(read(file, 4094, 6).unwrap(), b"4567XY");
+    assert_eq!(peek(whole, PAGE + 2, 2), b"XY");
+    poke(whole, 0, b"first");
+    assert_eq!(get("/shared/f")[..5], *b"first");
+    put("/shared/other", b"unrelated");
+    let late = open("/shared/f", WRITE).unwrap();
+    assert_eq!(write(late, 1, b"IRST"), Ok(4));
+    close(late);
+    assert_eq!(peek(whole, 0, 6), [b"fIRST", &bytes[5..6]].concat());
+    assert_eq!(sync(whole, 2 * PAGE), Ok(()));
+    assert_eq!(sync(second, PAGE), Ok(()));
+    // The mapping outlives the handle it was made with.
+    close(file);
+    poke(whole, 5, b"!");
+    assert_eq!(get("/shared/f")[..6], *b"fIRST!");
+    assert_eq!(unmap(second, PAGE), Ok(()));
+    assert_eq!(peek(whole, PAGE + 2, 2), b"XY");
+    assert_eq!(unmap(whole, 2 * PAGE), Ok(()));
+    assert_eq!((get("/shared/f").len(), &get("/shared/f")[4096..4100]), (5000, &b"67XY"[..]));
+}
+
+#[test]
+fn a_private_mapping_is_a_copy_nobody_else_sees() {
+    let _world = together();
+    mkdir("/private").unwrap();
+    let bytes = pattern(5000);
+    put("/private/f", &bytes);
+    // A handle that cannot write is enough: what is written stays in the copy.
+    let file = open("/private/f", READ).unwrap();
+    let copy = map(file, PAGE as u64, PAGE, MAP_READ | MAP_WRITE, false).unwrap();
+    close(file);
+    assert!(copy.addr().is_multiple_of(PAGE));
+    assert_eq!(peek(copy, 0, 5000 - PAGE), bytes[PAGE..]);
+    assert_eq!(peek(copy, 5000 - PAGE, 2 * PAGE - 5000), vec![0; 2 * PAGE - 5000]);
+    poke(copy, 0, b"mine");
+    assert_eq!(get("/private/f"), bytes);
+    let writer = open("/private/f", READ | WRITE).unwrap();
+    assert_eq!(write(writer, PAGE as u64 + 2, b"theirs"), Ok(6));
+    assert_eq!(peek(copy, 0, 8), [b"mine", &bytes[PAGE + 4..PAGE + 8]].concat());
+    // Beside a shared mapping of the same page, and beside another copy.
+    let shared = map(writer, PAGE as u64, PAGE, MAP_READ | MAP_WRITE, true).unwrap();
+    let other = map(writer, PAGE as u64, 10, MAP_READ | MAP_WRITE, false).unwrap();
+    assert!(copy != shared && copy != other && shared != other);
+    poke(shared, 0, b"S");
+    poke(copy, 1, b"P");
+    poke(other, 2, b"O");
+    assert_eq!(peek(shared, 0, 3), [b"S", &bytes[PAGE + 1..PAGE + 2], b"t"].concat());
+    assert_eq!((peek(copy, 0, 3), peek(other, 0, 3)), (b"mPn".to_vec(), [&bytes[PAGE..PAGE + 2], b"O"].concat()));
+    assert_eq!(sync(copy, PAGE), Ok(()));
+    assert_eq!(unmap(other, 10), Ok(()));
+    assert_eq!(unmap(copy, PAGE), Ok(()));
+    assert_eq!(unmap(shared, PAGE), Ok(()));
+    close(writer);
+}
+
+#[test]
+fn bytes_behind_the_end_read_as_zero_and_what_is_written_there_is_lost() {
+    let _world = together();
+    mkdir("/zeros").unwrap();
+    put("/zeros/f", &[0xab; 5000]);
+    let file = open("/zeros/f", READ | WRITE).unwrap();
+    let mapped = map(file, 0, 2 * PAGE, MAP_READ | MAP_WRITE, true).unwrap();
+    assert_eq!(peek(mapped, 4990, 2 * PAGE - 4990), [vec![0xab; 10], vec![0; 2 * PAGE - 5000]].concat());
+    // Not part of the file, and gone when the file grows over it, by a new size or by a write.
+    poke(mapped, 6000, b"lost");
+    assert_eq!(read(file, 5000, 2000).unwrap(), b"");
+    assert_eq!(set_size(file, 7000), Ok(()));
+    assert_eq!(read(file, 4999, 2001).unwrap(), [vec![0xab], vec![0; 2000]].concat());
+    assert_eq!(peek(mapped, 6000, 4), [0; 4]);
+    poke(mapped, 7500, b"lost");
+    assert_eq!(write(file, 7600, b"end"), Ok(3));
+    assert_eq!(read(file, 7000, 1000).unwrap(), [vec![0; 600], b"end".to_vec()].concat());
+    assert_eq!(peek(mapped, 7500, 4), [0; 4]);
+    // A file that shrinks stays where it is, and what was cut off is zero again.
+    assert_eq!(set_size(file, 100), Ok(()));
+    assert_eq!(status(file).size, 100);
+    assert_eq!(peek(mapped, 0, 2 * PAGE), [vec![0xab; 100], vec![0; 2 * PAGE - 100]].concat());
+    assert_eq!(set_size(file, 200), Ok(()));
+    assert_eq!(read(file, 0, 300).unwrap(), [vec![0xab; 100], vec![0; 100]].concat());
+    close(open("/zeros/f", WRITE | TRUNCATE).unwrap());
+    assert_eq!((status(file).size, peek(mapped, 0, 200)), (0, vec![0; 200]));
+    assert_eq!(write(file, 2, b"again"), Ok(5));
+    assert_eq!(peek(mapped, 0, 8), b"\0\0again\0");
+    assert_eq!(unmap(mapped, 2 * PAGE), Ok(()));
+    assert_eq!(get("/zeros/f"), b"\0\0again");
+    close(file);
+}
+
+#[test]
+fn a_mapped_file_grows_to_the_end_of_its_pages_and_freely_after_the_last_unmap() {
+    let _world = together();
+    mkdir("/pinned").unwrap();
+    let bytes = pattern(5000);
+    put("/pinned/f", &bytes);
+    let file = open("/pinned/f", READ | WRITE).unwrap();
+    let first = map(file, 0, 2 * PAGE, MAP_READ | MAP_WRITE, true).unwrap();
+    assert_eq!(set_size(file, 2 * PAGE as u64 + 1), Err(Error::NoSpace));
+    assert_eq!(write(file, 2 * PAGE as u64, b"x"), Err(Error::NoSpace));
+    assert_eq!(write(file, 2 * PAGE as u64 - 2, b"abc"), Err(Error::NoSpace));
+    assert_eq!((status(file).size, peek(first, 2 * PAGE - 2, 2)), (5000, vec![0; 2]), "a write that does not fit changes nothing");
+    assert_eq!(write(file, 2 * PAGE as u64 - 2, b"ab"), Ok(2));
+    assert_eq!(status(file).size, 2 * PAGE as u64);
+    let grown = [bytes.clone(), vec![0; 2 * PAGE - 5002], b"ab".to_vec()].concat();
+    assert_eq!(peek(first, 0, 2 * PAGE), grown);
+    // The bound holds while any shared mapping is left; a private one is none.
+    let second = map(file, PAGE as u64, PAGE, MAP_READ, true).unwrap();
+    let copy = map(file, 0, PAGE, MAP_READ, false).unwrap();
+    assert_eq!(unmap(first, 2 * PAGE), Ok(()));
+    assert_eq!(set_size(file, 2 * PAGE as u64 + 1), Err(Error::NoSpace));
+    assert_eq!(unmap(second, PAGE), Ok(()));
+    assert_eq!(set_size(file, 10000), Ok(()));
+    assert_eq!(read(file, 0, 20000).unwrap(), [grown.clone(), vec![0; 10000 - 2 * PAGE]].concat());
+    assert_eq!(write(file, 20000, b"far"), Ok(3));
+    assert_eq!(unmap(copy, PAGE), Ok(()));
+    // Mapped again, it is pinned at the size it has now.
+    let third = map(file, 4 * PAGE as u64, PAGE, MAP_READ | MAP_WRITE, true).unwrap();
+    assert_eq!(peek(third, 20000 - 4 * PAGE, 4), b"far\0");
+    assert_eq!(set_size(file, 5 * PAGE as u64 + 1), Err(Error::NoSpace));
+    assert_eq!(unmap(third, PAGE), Ok(()));
+    // Unmapped, it changes its size where it is while that wastes little, and moves when it has to.
+    assert_eq!(set_size(file, 20100), Ok(()));
+    assert_eq!(read(file, 19999, 200).unwrap(), [b"\0far".to_vec(), vec![0; 97]].concat());
+    assert_eq!(write(file, 5 * PAGE as u64 - 1, b"over the pages"), Ok(14));
+    assert_eq!(read(file, 5 * PAGE as u64 - 2, 100).unwrap(), b"\0over the pages");
+    let again = map(file, 0, PAGE, MAP_READ, true).unwrap();
+    assert_eq!(unmap(again, PAGE), Ok(()));
+    assert_eq!(set_size(file, 100), Ok(()));
+    assert_eq!(set_size(file, 5000), Ok(()));
+    assert_eq!(get("/pinned/f"), [&bytes[..100], &[0; 4900]].concat());
+    let again = map(file, 0, PAGE, MAP_READ, true).unwrap();
+    assert_eq!(unmap(again, PAGE), Ok(()));
+    close(open("/pinned/f", WRITE | TRUNCATE).unwrap());
+    assert_eq!(write(file, 0, b"fresh"), Ok(5));
+    assert_eq!(get("/pinned/f"), b"fresh");
+    close(file);
+}
+
+#[test]
+fn a_shared_mapping_keeps_a_removed_file_as_a_handle_does() {
+    let _world = alone();
+    mkdir("/kept").unwrap();
+    let base = used_bytes();
+    put("/kept/f", &[7; 5000]);
+    let file = open("/kept/f", READ | WRITE).unwrap();
+    let mapped = map(file, 0, 2 * PAGE, MAP_READ | MAP_WRITE, true).unwrap();
+    let copy = map(file, 0, PAGE, MAP_READ, false).unwrap();
+    // The bytes of the file count, not the pages they are in, and not a private copy.
+    assert_eq!(used_bytes(), base + 5000);
+    assert_eq!(remove("/kept/f"), Ok(()));
+    close(file);
+    assert_eq!((used_bytes(), stat("/kept/f")), (base + 5000, Err(Error::NotFound)));
+    poke(mapped, 0, b"still here");
+    assert_eq!(peek(mapped, 0, 12), b"still here\x07\x07");
+    assert_eq!(unmap(mapped, 2 * PAGE), Ok(()));
+    assert_eq!(used_bytes(), base);
+    assert_eq!(peek(copy, 0, 2), [7; 2]);
+    assert_eq!(unmap(copy, PAGE), Ok(()));
+
+    // A range that is mapped twice is unmapped twice, and the file is held until then.
+    put("/kept/g", &[8; 100]);
+    let file = open("/kept/g", READ).unwrap();
+    let (one, two) = (map(file, 0, PAGE, MAP_READ, true).unwrap(), map(file, 0, PAGE, MAP_READ, true).unwrap());
+    close(file);
+    // So does a file that a rename replaced.
+    put("/kept/h", b"new");
+    assert_eq!(rename("/kept/h", "/kept/g"), Ok(()));
+    assert_eq!(used_bytes(), base + 103);
+    assert_eq!(unmap(one, PAGE), Ok(()));
+    assert_eq!((used_bytes(), peek(two, 0, 2)), (base + 103, vec![8; 2]));
+    assert_eq!(unmap(two, PAGE), Ok(()));
+    assert_eq!(used_bytes(), base + 3);
+    assert_eq!(unmap(two, PAGE), Err(Error::InvalidArgument));
+
+    // The capacity bounds a mapped file as it bounds any other.
+    set_capacity(base + 3 + 5000 + 100);
+    put("/kept/i", &[9; 5000]);
+    let file = open("/kept/i", READ | WRITE).unwrap();
+    let mapped = map(file, 0, PAGE, MAP_READ, true).unwrap();
+    assert_eq!(set_size(file, 5101), Err(Error::NoSpace));
+    assert_eq!(write(file, 5100, b"x"), Err(Error::NoSpace));
+    assert_eq!(write(file, 5098, b"xy"), Ok(2));
+    assert_eq!(used_bytes(), base + 3 + 5100);
+    assert_eq!(set_size(file, 10), Ok(()));
+    assert_eq!(used_bytes(), base + 3 + 10);
+    assert_eq!(unmap(mapped, PAGE), Ok(()));
+    close(file);
+    assert_eq!(remove("/kept/i"), Ok(()));
+    assert_eq!(remove("/kept/g"), Ok(()));
+    assert_eq!(used_bytes(), base);
+    set_capacity(64 * 1024 * 1024);
+}
+
+#[test]
+fn map_checks_the_handle_the_access_and_the_range() {
+    let _world = together();
+    mkdir("/rules").unwrap();
+    put("/rules/f", &pattern(5000));
+    put("/rules/empty", b"");
+    put("/rules/page", &pattern(PAGE));
+    let (reader, writer, both) = (open("/rules/f", READ).unwrap(), open("/rules/f", WRITE).unwrap(), open("/rules/f", READ | WRITE).unwrap());
+    // Every mapping reads the file, so it needs a handle that may; a shared one that writes needs one that may write.
+    for (access, shared) in [(MAP_READ, true), (MAP_READ, false), (MAP_READ | MAP_WRITE, true), (MAP_WRITE, false)] {
+        assert_eq!(map(writer, 0, PAGE, access, shared), Err(Error::AccessDenied));
+    }
+    assert_eq!(map(reader, 0, PAGE, MAP_READ | MAP_WRITE, true), Err(Error::AccessDenied));
+    assert_eq!(map(reader, 0, PAGE, MAP_WRITE, true), Err(Error::AccessDenied));
+    let granted = [(reader, MAP_READ, true), (reader, MAP_READ | MAP_WRITE, false), (reader, MAP_WRITE, false), (both, MAP_READ | MAP_WRITE, true), (both, MAP_WRITE, true)];
+    for (handle, access, shared) in granted {
+        let mapped = map(handle, 0, PAGE, access, shared).unwrap();
+        assert_eq!(unmap(mapped, PAGE), Ok(()));
+    }
+    for access in [EXECUTE, MAP_READ | EXECUTE, MAP_READ | MAP_WRITE | EXECUTE] {
+        assert_eq!(map(both, 0, PAGE, access, true), Err(Error::Unsupported));
+        assert_eq!(map(both, 0, PAGE, access, false), Err(Error::Unsupported));
+    }
+    let directory = opendir("/rules").unwrap();
+    assert_eq!(map(directory, 0, PAGE, MAP_READ, true), Err(Error::InvalidArgument));
+    assert_eq!(map(ptr::null_mut(), 0, PAGE, MAP_READ, true), Err(Error::InvalidArgument));
+    closedir(directory);
+    // The offset is a multiple of the page, and the range ends in the page that holds the last byte at the latest.
+    for shared in [true, false] {
+        let refused = [(1, 10), (PAGE as u64 - 1, 1), (PAGE as u64 + 100, 10), (0, 0), (0, 2 * PAGE + 1), (PAGE as u64, PAGE + 1), (2 * PAGE as u64, 1), (u64::MAX - 4095, PAGE), (0, usize::MAX)];
+        for (offset, length) in refused {
+            assert_eq!(map(both, offset, length, MAP_READ, shared), Err(Error::InvalidArgument), "{offset} {length}");
+        }
+        for (offset, length) in [(0, 1), (0, 5000), (0, 2 * PAGE), (PAGE as u64, 1), (PAGE as u64, PAGE)] {
+            let mapped = map(both, offset, length, MAP_READ, shared).unwrap();
+            assert_eq!(peek(mapped, 0, 1), pattern(5000)[offset as usize..offset as usize + 1]);
+            assert_eq!(unmap(mapped, length), Ok(()));
+        }
+        let (empty, page) = (open("/rules/empty", READ).unwrap(), open("/rules/page", READ).unwrap());
+        assert_eq!(map(empty, 0, 1, MAP_READ, shared), Err(Error::InvalidArgument), "an empty file has no page");
+        assert_eq!(map(page, 0, PAGE + 1, MAP_READ, shared), Err(Error::InvalidArgument));
+        let mapped = map(page, 0, PAGE, MAP_READ, shared).unwrap();
+        assert_eq!(peek(mapped, 0, PAGE), pattern(PAGE));
+        assert_eq!(unmap(mapped, PAGE), Ok(()));
+        close(empty);
+        close(page);
+    }
+    // unmap and sync take what one map returned: that address with that length, while it is mapped.
+    for shared in [true, false] {
+        let mapped = map(both, PAGE as u64, 100, MAP_READ, shared).unwrap();
+        for call in [unmap, sync] {
+            assert_eq!(call(mapped, 99), Err(Error::InvalidArgument));
+            assert_eq!(call(mapped, PAGE), Err(Error::InvalidArgument));
+            assert_eq!(call(mapped.wrapping_add(1), 99), Err(Error::InvalidArgument));
+            assert_eq!(call(mapped.wrapping_sub(PAGE), 100), Err(Error::InvalidArgument));
+            assert_eq!(call(ptr::null_mut(), 100), Err(Error::InvalidArgument));
+        }
+        assert_eq!(sync(mapped, 100), Ok(()));
+        assert_eq!(unmap(mapped, 100), Ok(()));
+        assert_eq!(sync(mapped, 100), Err(Error::InvalidArgument));
+        assert_eq!(unmap(mapped, 100), Err(Error::InvalidArgument));
+    }
+    for handle in [reader, writer, both] { close(handle); }
 }

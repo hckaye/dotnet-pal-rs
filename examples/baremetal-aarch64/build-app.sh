@@ -7,8 +7,8 @@
 # system and null references through the fault vector and expects sockets to be absent,
 # SystemProbe, which exercises links, modes, times, locks and the working directory
 # on that file system and expects processes, notifications and module loading to be absent,
-# or FacilitiesProbe, which reads the in-memory file system as a drive and expects change
-# watching, file mapping and network information to be absent.
+# or FacilitiesProbe, which watches and maps files of the in-memory file system, reads it
+# as a drive, and expects network information and local sockets to be absent.
 # Run inside the Linux container from the repository root:
 #   docker run --rm -v "$PWD:/work" -v dotnet-pal-nuget:/nuget -w /work dotnet-pal-baremetal \
 #     bash examples/baremetal-aarch64/build-app.sh IoProbe
@@ -18,7 +18,7 @@ case "$sample" in
   ConsoleProbe) pass='^CONSOLE PROBE PASS'; extra=();;
   IoProbe) pass='^IO PROBE PASS'; extra=(-p:ProbeExpect=files);;
   SystemProbe) pass='^SYSTEM PROBE PASS'; extra=('-p:ProbeExpect=links%3Bbaremetal');;
-  FacilitiesProbe) pass='^FACILITIES PROBE PASS'; extra=(-p:ProbeExpect=volumes);;
+  FacilitiesProbe) pass='^FACILITIES PROBE PASS'; extra=('-p:ProbeExpect=watches%3Bmappings%3Bvolumes%3Bnoentropy');;
   *) echo 'usage: build-app.sh [ConsoleProbe|IoProbe|SystemProbe|FacilitiesProbe]' >&2; exit 2;;
 esac
 cd "$(dirname "$0")"

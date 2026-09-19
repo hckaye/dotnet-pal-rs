@@ -20,7 +20,7 @@
 //! | `Diagnostics`, `Streams` | the PL011 UART at 0x0900_0000 (no input: reads report end of input) |
 //! | `Topology`, `Process`, `Image`, `Modules` | one CPU, the RAM figures, exit through semihosting, the image's own unwind tables ([`platform`]) |
 //! | `Faults` | the synchronous exception vector: the interrupted registers go to the installed handler, which may resume them ([`fault`]) |
-//! | `Files` | an in-memory file system (`dotnet-pal-memfs`) over the port's heap |
+//! | `Files`, `Volumes`, `Watches`, `Mappings` | an in-memory file system (`dotnet-pal-memfs`) over the port's heap |
 //! | `SystemInfo` | the machine's name and uptime, the image's path; no environment, no user, no process accounting |
 //!
 //! What it does not provide, and says so through absent capabilities: an
@@ -107,7 +107,7 @@ dotnet_pal_rs::declare_port! {
     Streams = Baremetal,
     Modules = Baremetal,
     Faults = Baremetal,
-    Files = dotnet_pal_memfs::MemFs, Volumes = dotnet_pal_memfs::MemFs,
+    Files = dotnet_pal_memfs::MemFs, Volumes = dotnet_pal_memfs::MemFs, Watches = dotnet_pal_memfs::MemFs, Mappings = dotnet_pal_memfs::MemFs,
     SystemInfo = Baremetal,
     Abort = exit::Abort,
 }
@@ -193,6 +193,9 @@ pub extern "C" fn pal_rust_start() -> ! {
     thread::init_boot_thread();
     // File times come from the same clock as `Realtime`.
     dotnet_pal_memfs::set_clock(|| <Baremetal as port::Realtime>::realtime_ns().unwrap_or(0));
+    // A reader that waits for a change, or a lock that waits for its turn, lets the other threads run meanwhile.
+    dotnet_pal_memfs::set_wait(|nanoseconds| { let _ = <Baremetal as port::Scheduler>::sleep_ns(nanoseconds); });
+    dotnet_pal_memfs::set_yield(|| { let _ = <Baremetal as port::Scheduler>::yield_now(); });
     // SAFETY: the linker script brackets .init_array with these symbols and every
     // entry in it is a function the C++ compiler put there.
     unsafe {

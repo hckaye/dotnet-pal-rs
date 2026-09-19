@@ -10,7 +10,7 @@
 //! (an alias label such as "eth0:1" names its interface), and one whose index the
 //! kernel no longer knows is left out, so the indices stay dense.
 use crate::linux::Linux;
-use crate::linux_sockets::{descriptor, native, shape};
+use crate::linux_sockets::{descriptor, get, native, shape};
 use crate::network::{Interface, InterfaceAddress, INTERFACE_ETHERNET, INTERFACE_LOOPBACK, INTERFACE_POINT_TO_POINT, INTERFACE_TUNNEL, INTERFACE_UNKNOWN,
     INTERFACE_WIRELESS, LINK_DOWN, LINK_UNKNOWN, LINK_UP, MULTICAST};
 use crate::port::{self, Error, Result};
@@ -194,9 +194,16 @@ impl port::Network for Linux {
     }
     unsafe fn membership(socket: *mut c_void, group: &Address, interface_index: u32, join: bool) -> Result<()> {
         let fd = unsafe { descriptor(socket) }?;
-        let (stream, v6) = shape(fd)?;
-        // The kernel calls a stream socket EPROTO and lets an IPv6 socket join an IPv4 group (measured); both are the caller's mistake here.
-        if stream || v6 != (group.family as u32 == IPV6) { return Err(Error::InvalidArgument); }
+        let (stream, domain) = shape(fd)?;
+        // The kernel calls a stream socket EPROTO; here it is the caller's mistake, as is a group of a family the socket does not carry.
+        let carried = match (domain, group.family as u32) {
+            (libc::AF_INET, IPV4) | (libc::AF_INET6, IPV6) => true,
+            // An IPv6 socket that carries both families joins an IPv4 group through the IPv4 option. The kernel takes that option
+            // from an IPv6-only socket too and then delivers nothing (measured), so the socket is asked first.
+            (libc::AF_INET6, IPV4) => get::<i32>(fd, libc::IPPROTO_IPV6, libc::IPV6_V6ONLY)? == 0,
+            _ => false,
+        };
+        if stream || !carried { return Err(Error::InvalidArgument); }
         let Ok(interface) = i32::try_from(interface_index) else { return Err(Error::NotFound); };
         let a = group.address;
         let rc = match group.family as u32 {

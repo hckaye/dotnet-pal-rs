@@ -59,6 +59,9 @@ pub mod watches;
 pub mod mappings;
 pub mod volumes;
 pub mod network;
+pub mod local_sockets;
+pub mod accounts;
+pub mod priority;
 pub mod storage;
 #[cfg(feature = "linux")]
 pub mod linux;
@@ -84,6 +87,12 @@ mod linux_mappings;
 mod linux_volumes;
 #[cfg(feature = "linux")]
 mod linux_network;
+#[cfg(feature = "linux")]
+mod linux_local_sockets;
+#[cfg(feature = "linux")]
+mod linux_accounts;
+#[cfg(feature = "linux")]
+mod linux_priority;
 #[cfg(feature = "host")]
 pub mod host;
 #[cfg(any(feature = "wasi-clock", feature = "wasi-runtime", feature = "wasi-dispatch"))]
@@ -173,6 +182,9 @@ pub struct Api {
     pub mappings: mappings::Ops,
     pub volumes: volumes::Ops,
     pub network: network::Ops,
+    pub local_sockets: local_sockets::Ops,
+    pub accounts: accounts::Ops,
+    pub priority: priority::Ops,
 }
 static RESERVE: Counter = Counter::new();
 static COMMIT: Counter = Counter::new();
@@ -349,10 +361,13 @@ pub fn build<P: Port>() -> Option<Api> {
     let (mappings_caps, mappings_ops) = mappings::negotiate::<P>();
     let (volumes_caps, volumes_ops) = volumes::negotiate::<P>();
     let (network_caps, network_ops) = network::negotiate::<P>();
+    let (local_sockets_caps, local_sockets_ops) = local_sockets::negotiate::<P>();
+    let (accounts_caps, accounts_ops) = accounts::negotiate::<P>();
+    let (priority_caps, priority_ops) = priority::negotiate::<P>();
     capabilities |= services_caps | kernel_caps | runtime_caps | wasi_caps | context_caps | support_caps
         | topology_caps | process_caps | image_caps | streams_caps | files_caps | sockets_caps | faults_caps
         | system_caps | notifications_caps | processes_caps | terminal_caps
-        | watches_caps | mappings_caps | volumes_caps | network_caps;
+        | watches_caps | mappings_caps | volumes_caps | network_caps | local_sockets_caps | accounts_caps | priority_caps;
     Some(Api {
         header: Header { abi_version: ABI_VERSION, struct_size: mem::size_of::<Api>() as u32, capabilities },
         vm: vm::ops::<P::VirtualMemory>(),
@@ -379,6 +394,9 @@ pub fn build<P: Port>() -> Option<Api> {
         mappings: mappings_ops,
         volumes: volumes_ops,
         network: network_ops,
+        local_sockets: local_sockets_ops,
+        accounts: accounts_ops,
+        priority: priority_ops,
     })
 }
 
@@ -446,7 +464,7 @@ mod tests {
         let bits = [CAP_VM, CAP_LINEAR, CAP_DYNAMIC_LINEAR, services::CAP_CLOCK, services::CAP_SCHEDULER,
             kernel::ALL, runtime::ALL, wasi::CAP, context::CAP, support::ALL, topology::CAP, process::CAP, image::CAP, streams::CAP,
             files::CAP, sockets::CAP, faults::CAP, system::CAP, notifications::CAP, processes::CAP, terminal::CAP,
-            watches::CAP, mappings::CAP, volumes::CAP, network::CAP];
+            watches::CAP, mappings::CAP, volumes::CAP, network::CAP, local_sockets::CAP, accounts::CAP, priority::CAP];
         for (i, a) in bits.iter().enumerate() {
             assert_ne!(*a, 0);
             for b in &bits[i + 1..] { assert_eq!(a & b, 0, "capability groups overlap"); }
@@ -467,6 +485,7 @@ mod tests {
         assert!(api.files.open.is_none() && api.sockets.create.is_none() && api.faults.install.is_none() && api.faults.read_stats.is_some());
         assert!(api.system.text.is_none() && api.notifications.install.is_none() && api.processes.spawn.is_none() && api.terminal.window_size.is_none());
         assert!(api.watches.open.is_none() && api.mappings.map.is_none() && api.volumes.entry.is_none() && api.network.interface_entry.is_none());
+        assert!(api.local_sockets.bind.is_none() && api.accounts.user_by_id.is_none() && api.priority.get.is_none());
         assert!(core::ptr::eq(api, negotiate::<Empty>(&EMPTY_SLOT, ABI_VERSION)));
     }
     struct Rejecting;
@@ -482,7 +501,8 @@ mod tests {
         type Image = port::Absent; type Streams = port::Absent; type Files = port::Absent; type Sockets = port::Absent;
         type Faults = port::Absent; type SystemInfo = port::Absent; type Notifications = port::Absent; type Processes = port::Absent;
         type Terminal = port::Absent; type Watches = port::Absent; type Mappings = port::Absent; type Volumes = port::Absent;
-        type Network = port::Absent; type Abort = port::Trap;
+        type Network = port::Absent; type LocalSockets = port::Absent; type Accounts = port::Absent; type Priority = port::Absent;
+        type Abort = port::Trap;
         fn validate() -> bool { false }
     }
     static REJECT_SLOT: Slot = Slot::new();

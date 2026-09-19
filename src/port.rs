@@ -545,6 +545,37 @@ pub trait Network {
     /// Joins or leaves a multicast group on a datagram socket; interface 0 is the target's choice.
     unsafe fn membership(socket: *mut c_void, group: &crate::sockets::Address, interface_index: u32, join: bool) -> Result<()>;
 }
+/// Unix domain sockets (`CAP_LOCAL_SOCKETS`). `socket` is a handle of [`Sockets`] created with
+/// `sockets::LOCAL`, so the type that provides that trait provides this one.
+pub trait LocalSockets {
+    const PROVIDED: bool = true;
+    /// Gives the socket a path in the file system. The path is created and nobody removes it.
+    unsafe fn bind(socket: *mut c_void, path: &[u8]) -> Result<()>;
+    /// Follows `Sockets::connect`: `Err(InProgress)` on a non-blocking socket that has to wait.
+    unsafe fn connect(socket: *mut c_void, path: &[u8]) -> Result<()>;
+    /// The path of the socket, or of its peer, with the buffer contract of `Sockets::host_name`;
+    /// `Err(NotFound)` for a socket without a path.
+    unsafe fn address(socket: *mut c_void, peer: bool, out: *mut u8, capacity: usize) -> Result<usize>;
+    /// The numeric user the process at the other end of a connected stream socket ran as when it connected.
+    unsafe fn peer_user(socket: *mut c_void) -> Result<u32>;
+}
+/// Users and groups of the target (`CAP_ACCOUNTS`).
+pub trait Accounts {
+    const PROVIDED: bool = true;
+    /// `Err(NotFound)` when no account has the id. `accounts::Account::new` builds the answer.
+    fn user_by_id(user_id: u32) -> Result<crate::accounts::Account>;
+    fn user_by_name(name: &[u8]) -> Result<crate::accounts::Account>;
+    /// Writes up to `capacity` supplementary group ids of this process and returns how many there are.
+    unsafe fn process_groups(out: *mut u32, capacity: usize) -> Result<usize>;
+    /// The same for the groups an account belongs to, `primary_group` included.
+    unsafe fn user_groups(name: &[u8], primary_group: u32, out: *mut u32, capacity: usize) -> Result<usize>;
+}
+/// Scheduling priority of a process (`CAP_PRIORITY`): a niceness from -20 to 19; process 0 is this one.
+pub trait Priority {
+    const PROVIDED: bool = true;
+    fn get(process: u64) -> Result<i32>;
+    fn set(process: u64, value: i32) -> Result<()>;
+}
 /// Terminates the process or instance after an internal invariant failure.
 pub trait Abort {
     fn abort() -> !;
@@ -752,6 +783,22 @@ absent!(Network {
     unsafe fn reverse_lookup(_: &crate::sockets::Address, _: *mut u8, _: usize) -> Result<usize> { Err(Error::Unsupported) }
     unsafe fn membership(_: *mut c_void, _: &crate::sockets::Address, _: u32, _: bool) -> Result<()> { Err(Error::Unsupported) }
 });
+absent!(LocalSockets {
+    unsafe fn bind(_: *mut c_void, _: &[u8]) -> Result<()> { Err(Error::Unsupported) }
+    unsafe fn connect(_: *mut c_void, _: &[u8]) -> Result<()> { Err(Error::Unsupported) }
+    unsafe fn address(_: *mut c_void, _: bool, _: *mut u8, _: usize) -> Result<usize> { Err(Error::Unsupported) }
+    unsafe fn peer_user(_: *mut c_void) -> Result<u32> { Err(Error::Unsupported) }
+});
+absent!(Accounts {
+    fn user_by_id(_: u32) -> Result<crate::accounts::Account> { Err(Error::Unsupported) }
+    fn user_by_name(_: &[u8]) -> Result<crate::accounts::Account> { Err(Error::Unsupported) }
+    unsafe fn process_groups(_: *mut u32, _: usize) -> Result<usize> { Err(Error::Unsupported) }
+    unsafe fn user_groups(_: &[u8], _: u32, _: *mut u32, _: usize) -> Result<usize> { Err(Error::Unsupported) }
+});
+absent!(Priority {
+    fn get(_: u64) -> Result<i32> { Err(Error::Unsupported) }
+    fn set(_: u64, _: i32) -> Result<()> { Err(Error::Unsupported) }
+});
 absent!(Image {
     unsafe fn unwind_info(_: usize) -> Result<crate::image::UnwindInfo> { Err(Error::Unsupported) }
     unsafe fn readable(_: usize, _: usize) -> Result<bool> { Err(Error::Unsupported) }
@@ -801,6 +848,9 @@ pub trait Port {
     type Mappings: Mappings;
     type Volumes: Volumes;
     type Network: Network;
+    type LocalSockets: LocalSockets;
+    type Accounts: Accounts;
+    type Priority: Priority;
     type Abort: Abort;
     fn validate() -> bool { true }
 }
@@ -870,6 +920,9 @@ macro_rules! declare_port {
             type Mappings = $crate::__port_lookup!(Mappings; $($key = $provider),*);
             type Volumes = $crate::__port_lookup!(Volumes; $($key = $provider),*);
             type Network = $crate::__port_lookup!(Network; $($key = $provider),*);
+            type LocalSockets = $crate::__port_lookup!(LocalSockets; $($key = $provider),*);
+            type Accounts = $crate::__port_lookup!(Accounts; $($key = $provider),*);
+            type Priority = $crate::__port_lookup!(Priority; $($key = $provider),*);
             type Abort = $crate::__port_lookup!(Abort; $($key = $provider),*);
         }
     };
@@ -915,6 +968,9 @@ macro_rules! __port_lookup {
     (Mappings; Mappings = $t:ty $(, $($rest:tt)*)?) => { $t };
     (Volumes; Volumes = $t:ty $(, $($rest:tt)*)?) => { $t };
     (Network; Network = $t:ty $(, $($rest:tt)*)?) => { $t };
+    (LocalSockets; LocalSockets = $t:ty $(, $($rest:tt)*)?) => { $t };
+    (Accounts; Accounts = $t:ty $(, $($rest:tt)*)?) => { $t };
+    (Priority; Priority = $t:ty $(, $($rest:tt)*)?) => { $t };
     (Abort; Abort = $t:ty $(, $($rest:tt)*)?) => { $t };
     ($want:ident; $other:ident = $t:ty $(, $($rest:tt)*)?) => { $crate::__port_lookup!($want; $($($rest)*)?) };
     (Abort;) => { $crate::port::Trap };

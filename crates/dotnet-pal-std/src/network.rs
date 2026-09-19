@@ -16,7 +16,11 @@
 //!
 //! Membership is `socket2` on the handles of the sockets provider. macOS joins a
 //! group on an interface of its own choice when the index names none (measured), so
-//! an index nobody has is answered here. Reverse lookup is getnameinfo(3).
+//! an index nobody has is answered here. An IPv6 socket that carries both families
+//! joins an IPv4 group at the IPv4 level on Linux, which macOS refuses (EINVAL); macOS
+//! takes the group mapped into IPv6 (::ffff:a.b.c.d) at the IPv6 level instead. Either
+//! OS lets an IPv6-only socket join that way and delivers nothing to it (all measured,
+//! Linux 6.12 and Darwin 25), so the socket is asked first. Reverse lookup is getnameinfo(3).
 //! Windows offers none of this: the capability is absent there.
 #[cfg(unix)]
 mod unix {
@@ -154,6 +158,8 @@ mod unix {
         if index == 0 || snapshot.is_none() { *snapshot = Some(take()?); }
         snapshot.as_ref().and_then(|lists| list(lists).get(index).copied()).ok_or(Error::NotFound)
     }
+    /// Whether an IPv6 socket that carries both families can join an IPv4 group here: only where it has been measured.
+    const DUAL: bool = cfg!(any(target_os = "linux", target_os = "android", target_vendor = "apple"));
     fn group_error(e: io::Error) -> Error {
         // EADDRINUSE is a group the socket is in already, EADDRNOTAVAIL one it is not in, ENODEV or ENXIO an interface that does not exist.
         match e.raw_os_error() {
@@ -189,11 +195,17 @@ mod unix {
         }
         unsafe fn membership(socket: *mut c_void, group: &Address, interface_index: u32, join: bool) -> Result<()> {
             let socket = unsafe { borrow::<Socket>(socket) }?;
-            // A stream socket has no groups, and a group of the other family is not this socket's (Linux would let an IPv6 socket join it).
-            if socket.stream || socket.v6 != (group.family as u32 == IPV6) { return Err(Error::InvalidArgument); }
+            // A stream socket has no groups, a local socket neither, and a group of a family the socket does not carry is not this socket's.
+            let mapped = socket.v6 && group.family as u32 == IPV4;
+            if socket.stream || socket.local || (socket.v6 != (group.family as u32 == IPV6) && !mapped) { return Err(Error::InvalidArgument); }
+            if mapped && (!DUAL || socket.inner.only_v6().map_err(group_error)?) { return Err(Error::InvalidArgument); }
             if interface_index != 0 && !tuning::exists(interface_index) { return Err(Error::NotFound); }
             let (s, a) = (&socket.inner, group.address);
             match (group.family as u32, join) {
+                #[cfg(target_vendor = "apple")]
+                (IPV4, true) if mapped => s.join_multicast_v6(&Ipv4Addr::new(a[0], a[1], a[2], a[3]).to_ipv6_mapped(), interface_index),
+                #[cfg(target_vendor = "apple")]
+                (IPV4, false) if mapped => s.leave_multicast_v6(&Ipv4Addr::new(a[0], a[1], a[2], a[3]).to_ipv6_mapped(), interface_index),
                 (IPV4, true) => s.join_multicast_v4_n(&Ipv4Addr::new(a[0], a[1], a[2], a[3]), &InterfaceIndexOrAddress::Index(interface_index)),
                 (IPV4, false) => s.leave_multicast_v4_n(&Ipv4Addr::new(a[0], a[1], a[2], a[3]), &InterfaceIndexOrAddress::Index(interface_index)),
                 (_, true) => s.join_multicast_v6(&Ipv6Addr::from(a), interface_index),

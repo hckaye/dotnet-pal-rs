@@ -118,6 +118,12 @@ pub fn validate() -> bool {
     if !volumes::validate() { return false; }
     #[cfg(feature = "host-network")]
     if !network::validate() { return false; }
+    #[cfg(feature = "host-local-sockets")]
+    if !local_sockets::validate() { return false; }
+    #[cfg(feature = "host-accounts")]
+    if !accounts::validate() { return false; }
+    #[cfg(feature = "host-priority")]
+    if !priority::validate() { return false; }
     true
 }
 
@@ -1028,6 +1034,109 @@ pub mod network {
         unsafe fn membership(socket: *mut c_void, group: &Address, interface_index: u32, join: bool) -> Result<()> {
             let Some(f) = TABLE.get().and_then(|t| t.ops.membership) else { return Err(Error::Unsupported); };
             port::from_status(unsafe { f(socket, group, interface_index, join as u32) })
+        }
+    }
+}
+
+#[cfg(feature = "host-local-sockets")]
+pub mod local_sockets {
+    use super::*;
+    use crate::local_sockets::{Host as Table, CAP};
+    extern "C" { fn dotnet_pal_host_local_sockets_v2() -> *const Table; }
+    static TABLE: Cached<Table> = Cached::new();
+    pub fn validate() -> bool {
+        let Some(t) = (unsafe { table(dotnet_pal_host_local_sockets_v2(), CAP) }) else { return false; };
+        if t.ops.bind.is_none() || t.ops.connect.is_none() || t.ops.address.is_none() || t.ops.peer_user.is_none() { return false; }
+        TABLE.set(t);
+        true
+    }
+    impl port::LocalSockets for Host {
+        unsafe fn bind(socket: *mut c_void, path: &[u8]) -> Result<()> {
+            let Some(f) = TABLE.get().and_then(|t| t.ops.bind) else { return Err(Error::Unsupported); };
+            port::from_status(unsafe { f(socket, path.as_ptr(), path.len()) })
+        }
+        unsafe fn connect(socket: *mut c_void, path: &[u8]) -> Result<()> {
+            let Some(f) = TABLE.get().and_then(|t| t.ops.connect) else { return Err(Error::Unsupported); };
+            port::from_status(unsafe { f(socket, path.as_ptr(), path.len()) })
+        }
+        unsafe fn address(socket: *mut c_void, peer: bool, out: *mut u8, capacity: usize) -> Result<usize> {
+            let Some(f) = TABLE.get().and_then(|t| t.ops.address) else { return Err(Error::Unsupported); };
+            let mut needed = 0;
+            match port::from_status(unsafe { f(socket, peer as u32, out, capacity, &mut needed) }) { Ok(()) | Err(Error::BufferTooSmall) => Ok(needed), Err(e) => Err(e) }
+        }
+        unsafe fn peer_user(socket: *mut c_void) -> Result<u32> {
+            let Some(f) = TABLE.get().and_then(|t| t.ops.peer_user) else { return Err(Error::Unsupported); };
+            let mut user = u32::MAX;
+            port::from_status(unsafe { f(socket, &mut user) })?;
+            Ok(user)
+        }
+    }
+}
+
+#[cfg(feature = "host-accounts")]
+pub mod accounts {
+    use super::*;
+    use crate::accounts::{Account, Host as Table, CAP};
+    extern "C" { fn dotnet_pal_host_accounts_v2() -> *const Table; }
+    static TABLE: Cached<Table> = Cached::new();
+    /// Lookups and group lists are separate facilities, so a host may leave any callback NULL.
+    pub fn validate() -> bool {
+        let Some(t) = (unsafe { table(dotnet_pal_host_accounts_v2(), CAP) }) else { return false; };
+        TABLE.set(t);
+        true
+    }
+    /// A host that calls a list too small for a buffer it fits in has written nothing the caller could use.
+    fn listed(status: Result<()>, count: usize, capacity: usize) -> Result<usize> {
+        match status { Ok(()) => Ok(count), Err(Error::BufferTooSmall) if count > capacity => Ok(count), Err(Error::BufferTooSmall) => Err(Error::Os), Err(e) => Err(e) }
+    }
+    impl port::Accounts for Host {
+        fn user_by_id(user_id: u32) -> Result<Account> {
+            let Some(f) = TABLE.get().and_then(|t| t.ops.user_by_id) else { return Err(Error::Unsupported); };
+            let mut account = Account::EMPTY;
+            port::from_status(unsafe { f(user_id, &mut account, core::mem::size_of::<Account>()) })?;
+            Ok(account)
+        }
+        fn user_by_name(name: &[u8]) -> Result<Account> {
+            let Some(f) = TABLE.get().and_then(|t| t.ops.user_by_name) else { return Err(Error::Unsupported); };
+            let mut account = Account::EMPTY;
+            port::from_status(unsafe { f(name.as_ptr(), name.len(), &mut account, core::mem::size_of::<Account>()) })?;
+            Ok(account)
+        }
+        unsafe fn process_groups(out: *mut u32, capacity: usize) -> Result<usize> {
+            let Some(f) = TABLE.get().and_then(|t| t.ops.process_groups) else { return Err(Error::Unsupported); };
+            let mut count = 0;
+            listed(port::from_status(unsafe { f(out, capacity, &mut count) }), count, capacity)
+        }
+        unsafe fn user_groups(name: &[u8], primary_group: u32, out: *mut u32, capacity: usize) -> Result<usize> {
+            let Some(f) = TABLE.get().and_then(|t| t.ops.user_groups) else { return Err(Error::Unsupported); };
+            let mut count = 0;
+            listed(port::from_status(unsafe { f(name.as_ptr(), name.len(), primary_group, out, capacity, &mut count) }), count, capacity)
+        }
+    }
+}
+
+#[cfg(feature = "host-priority")]
+pub mod priority {
+    use super::*;
+    use crate::priority::{Host as Table, CAP};
+    extern "C" { fn dotnet_pal_host_priority_v2() -> *const Table; }
+    static TABLE: Cached<Table> = Cached::new();
+    pub fn validate() -> bool {
+        let Some(t) = (unsafe { table(dotnet_pal_host_priority_v2(), CAP) }) else { return false; };
+        if t.ops.get.is_none() || t.ops.set.is_none() { return false; }
+        TABLE.set(t);
+        true
+    }
+    impl port::Priority for Host {
+        fn get(process: u64) -> Result<i32> {
+            let Some(f) = TABLE.get().and_then(|t| t.ops.get) else { return Err(Error::Unsupported); };
+            let mut value = 0;
+            port::from_status(unsafe { f(process, &mut value) })?;
+            Ok(value)
+        }
+        fn set(process: u64, value: i32) -> Result<()> {
+            let Some(f) = TABLE.get().and_then(|t| t.ops.set) else { return Err(Error::Unsupported); };
+            port::from_status(unsafe { f(process, value) })
         }
     }
 }

@@ -263,14 +263,36 @@ static void traffic(uint32_t family, dotnet_pal_socket_address group, uint32_t i
 /* The statuses of joining and leaving on one datagram socket, without traffic. */
 static void statuses(uint32_t family, dotnet_pal_socket_address group, dotnet_pal_socket_address other_family, uint32_t interface) {
     void *datagram = open_socket(family, UDP), *stream = open_socket(family, TCP);
+    /* An IPv6 socket that carries IPv6 alone, so that an IPv4 group is not its own. */
+    if (family == V6) assert(s->set_option(datagram, DOTNET_PAL_SOCKET_IPV6_ONLY, 1) == 0);
     (void)bind_any(datagram, family);
     assert(member(datagram, &group, interface, 0) == DOTNET_PAL_ADDRESS_NOT_AVAILABLE); /* a group never joined */
     assert(member(datagram, &group, interface, 1) == 0 && member(datagram, &group, interface, 1) == DOTNET_PAL_ADDRESS_IN_USE);
     assert(member(datagram, &group, interface, 0) == 0 && member(datagram, &group, interface, 0) == DOTNET_PAL_ADDRESS_NOT_AVAILABLE);
     assert(member(datagram, &group, 999999, 1) == DOTNET_PAL_NOT_FOUND && member(datagram, &group, UINT32_MAX, 1) == DOTNET_PAL_NOT_FOUND);
-    /* A stream socket has no groups, and a group of the other family is not this socket's. */
+    /* A stream socket has no groups, and a group of a family the socket does not carry is not this socket's. */
     assert(member(stream, &group, interface, 1) == INVALID && member(datagram, &other_family, interface, 1) == INVALID);
     assert(s->close(datagram) == 0 && s->close(stream) == 0);
+}
+/* An IPv6 socket that carries both families joins an IPv4 group: the datagram of an IPv4 sender arrives, from the sender's address
+ * mapped into IPv6, and no longer once the socket has left. */
+static void dual(dotnet_pal_socket_address group, uint32_t interface) {
+    static const uint8_t mapped[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
+    void *receiver = open_socket(V6, UDP), *sender = open_socket(V4, UDP), *only = open_socket(V6, UDP); size_t done = 7, own = 0; dotnet_pal_socket_address from, at;
+    assert(s->set_option(receiver, DOTNET_PAL_SOCKET_IPV6_ONLY, 0) == 0 && s->set_option(only, DOTNET_PAL_SOCKET_IPV6_ONLY, 1) == 0);
+    group.port = bind_any(receiver, V6); (void)bind_any(only, V6);
+    assert(s->set_option(sender, DOTNET_PAL_SOCKET_MULTICAST_LOOPBACK, 1) == 0 && s->set_option(sender, DOTNET_PAL_SOCKET_MULTICAST_INTERFACE, interface) == 0);
+    assert(member(receiver, &group, interface, 0) == DOTNET_PAL_ADDRESS_NOT_AVAILABLE && member(receiver, &group, interface, 1) == 0);
+    assert(s->send(sender, (const uint8_t*)"mapped", 6, &group, &done) == 0 && done == 6 && arrives(receiver, "mapped", 5000 * MS, &from));
+    assert(s->local_address(sender, &at) == 0 && from.family == V6 && from.port == at.port && memcmp(from.address, mapped, sizeof mapped) == 0);
+    for (size_t a = 0; a < address_count; ++a) own += addresses[a].interface_index == interface && addresses[a].address.family == V4 && memcmp(addresses[a].address.address, from.address + 12, 4) == 0;
+    assert(own == 1);
+    assert(member(receiver, &group, interface, 1) == DOTNET_PAL_ADDRESS_IN_USE && member(receiver, &group, interface, 0) == 0);
+    assert(s->send(sender, (const uint8_t*)"after", 5, &group, &done) == 0 && done == 5 && !arrives(receiver, "after", 300 * MS, &from));
+    assert(member(receiver, &group, interface, 0) == DOTNET_PAL_ADDRESS_NOT_AVAILABLE);
+    /* The kernel would let an IPv6-only socket join and deliver nothing to it. */
+    assert(member(only, &group, interface, 1) == INVALID && member(only, &group, interface, 0) == INVALID);
+    assert(s->close(receiver) == 0 && s->close(sender) == 0 && s->close(only) == 0);
 }
 static void validation(void) {
     dotnet_pal_network_interface one; dotnet_pal_network_address other; size_t needed = 7; uint8_t small[8];
@@ -349,7 +371,7 @@ int main(int argc, char **argv) {
     void *probe = NULL; int six = s->create(V6, UDP, &probe) == 0; int six_traffic = 0;
     if (six) assert(s->close(probe) == 0);
     uint32_t interface = multicast_interface(V4), interface6 = six ? multicast_interface(V6) : 0;
-    dotnet_pal_socket_address never = group; never.address[3] = 99;
+    dotnet_pal_socket_address never = group, both = group; never.address[3] = 99; both.address[3] = 79;
     if (interface) {
         traffic(V4, group, interface);
         statuses(V4, never, group6, interface);
@@ -359,7 +381,7 @@ int main(int argc, char **argv) {
         assert(chosen == 0 || chosen == DOTNET_PAL_NOT_FOUND);
         if (chosen == 0) assert(member(socket, &group, 0, 0) == 0);
         assert(s->close(socket) == 0);
-        if (six) statuses(V6, group6, group, interface6 ? interface6 : interface);
+        if (six) { statuses(V6, group6, group, interface6 ? interface6 : interface); dual(both, interface); }
         if (interface6) { traffic(V6, group6, interface6); six_traffic = 1; }
         else if (six) puts("NETWORK note: no multicast interface with an IPv6 address here, IPv6 group traffic is skipped (the statuses are checked)");
     } else puts("NETWORK note: no interface that is up, carries multicast and has an IPv4 address; the membership checks are skipped");
@@ -368,8 +390,8 @@ int main(int argc, char **argv) {
     assert(stats.rejected_or_failed >= rejected + 4 && stats.interface_ok == 101 * interface_count && stats.address_ok == 101 * address_count);
     const dotnet_pal_network_interface *used = NULL;
     for (size_t i = 0; i < interface_count; ++i) if (interfaces[i].index == interface) used = &interfaces[i];
-    printf("NETWORK PASS interfaces=%zu addresses=%zu loopback=%s ipv6_loopback=%s test_net=%s multicast=%s(%u) mtu=%u speed_mbps=%llu ipv6_sockets=%d ipv6_traffic=%d lookups=%llu memberships=%llu rejected=%u\n",
+    printf("NETWORK PASS interfaces=%zu addresses=%zu loopback=%s ipv6_loopback=%s test_net=%s multicast=%s(%u) mtu=%u speed_mbps=%llu ipv6_sockets=%d ipv6_traffic=%d ipv4_group_on_ipv6_socket=%d lookups=%llu memberships=%llu rejected=%u\n",
         interface_count, address_count, name, name6, no_name, used ? (const char*)used->name : "-", interface, used ? used->mtu : 0, used ? (unsigned long long)(used->speed_bps / 1000000) : 0,
-        six, six_traffic, (unsigned long long)stats.lookup_ok, (unsigned long long)stats.membership_ok, rejected);
+        six, six_traffic, six && interface, (unsigned long long)stats.lookup_ok, (unsigned long long)stats.membership_ok, rejected);
     return 0;
 }

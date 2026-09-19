@@ -220,10 +220,14 @@ bash scripts/watches.sh        # file and directory changes against inotify
 bash scripts/mappings.sh       # shared and private file mappings against the kernel
 bash scripts/volumes.sh        # mount points and free space against statvfs
 bash scripts/network.sh        # interfaces, reverse lookup and multicast membership
+bash scripts/local-sockets.sh  # Unix domain sockets by path and the user at the other end
+bash scripts/accounts.sh       # users by id and by name, group lists
+bash scripts/priority.sh       # the priority of this process and of a child, every thread
 bash scripts/console-probe.sh  # the console probe with the boundary's System.Native
 bash scripts/io-probe.sh       # files, sockets and null references from C# with the boundary's System.Native
 bash scripts/system-probe.sh   # environment, child processes, signal registrations, links and locks from C#
-bash scripts/facilities-probe.sh # FileSystemWatcher, MemoryMappedFile, DriveInfo and NetworkInterface from C#
+bash scripts/facilities-probe.sh # FileSystemWatcher, MemoryMappedFile, DriveInfo, NetworkInterface and named pipes from C#
+bash scripts/terminal-probe.sh # System.Console on a pseudo-terminal whose keyboard the script plays
 ```
 
 See [platform](docs/platform.md) for the groups, the gate, the BCL native layer and
@@ -256,7 +260,7 @@ bash examples/baremetal-aarch64/run-qemu.sh            # the port's table test
 bash examples/baremetal-aarch64/build-app.sh           # the console probe as a bootable image (needs artifacts/source-sdk)
 bash examples/baremetal-aarch64/build-app.sh IoProbe   # files and null references from C#; sockets fail as absent
 bash examples/baremetal-aarch64/build-app.sh SystemProbe      # links, modes, times and locks; processes and signals fail as absent
-bash examples/baremetal-aarch64/build-app.sh FacilitiesProbe  # the in-memory file system as a drive; watching, mapping and interfaces fail as absent
+bash examples/baremetal-aarch64/build-app.sh FacilitiesProbe  # FileSystemWatcher, MemoryMappedFile and DriveInfo on the in-memory file system
 ```
 
 The image links the ILCompiler object for linux-arm64, the source-built runtime

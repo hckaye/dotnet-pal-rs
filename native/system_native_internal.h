@@ -58,6 +58,18 @@ static inline const dotnet_pal_network_ops *sn_network(void) {
     const dotnet_pal_api *a = sn_api();
     return sn_has(a, DOTNET_PAL_NETWORK_API_SIZE, DOTNET_PAL_CAP_NETWORK) ? &a->network : NULL;
 }
+static inline const dotnet_pal_local_sockets_ops *sn_local_sockets(void) {
+    const dotnet_pal_api *a = sn_api();
+    return sn_has(a, DOTNET_PAL_LOCAL_SOCKETS_API_SIZE, DOTNET_PAL_CAP_LOCAL_SOCKETS) ? &a->local_sockets : NULL;
+}
+static inline const dotnet_pal_accounts_ops *sn_accounts(void) {
+    const dotnet_pal_api *a = sn_api();
+    return sn_has(a, DOTNET_PAL_ACCOUNTS_API_SIZE, DOTNET_PAL_CAP_ACCOUNTS) ? &a->accounts : NULL;
+}
+static inline const dotnet_pal_priority_ops *sn_priority(void) {
+    const dotnet_pal_api *a = sn_api();
+    return sn_has(a, DOTNET_PAL_PRIORITY_API_SIZE, DOTNET_PAL_CAP_PRIORITY) ? &a->priority : NULL;
+}
 static inline const dotnet_pal_streams_ops *sn_streams(void) {
     const dotnet_pal_api *a = sn_api();
     if (!sn_has(a, DOTNET_PAL_STREAMS_API_SIZE, DOTNET_PAL_CAP_STREAMS) || !a->streams.write || !a->streams.read || !a->streams.is_terminal) return NULL;

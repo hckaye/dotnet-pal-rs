@@ -150,10 +150,81 @@ static int32_t current_user(Passwd *pwd, char *buffer, int32_t capacity, const c
     SystemNative_Free(name); SystemNative_Free(home);
     return result;
 }
-PALEXPORT int32_t SystemNative_GetPwUidR(uint32_t uid, Passwd* pwd, char* buf, int32_t buflen) { return current_user(pwd, buf, buflen, NULL, uid, false); }
+/* Any account, through the accounts group. -1: no such account; an errno otherwise, ERANGE when the buffer is short. */
+static int32_t any_user(Passwd *pwd, char *buffer, int32_t capacity, uint32_t status, const dotnet_pal_account *account) {
+    if (status == DOTNET_PAL_NOT_FOUND) return -1;
+    if (status != DOTNET_PAL_OK) return sn_errno(status);
+    size_t name = strlen((const char*)account->name) + 1, home = strlen((const char*)account->home) + 1, shell = strlen((const char*)account->shell) + 1;
+    if (name + home + shell + 1 > (size_t)capacity) return ERANGE;
+    char *empty = buffer + name + home + shell;
+    memcpy(buffer, account->name, name); memcpy(buffer + name, account->home, home); memcpy(buffer + name + home, account->shell, shell);
+    *empty = 0;
+    pwd->Name = buffer; pwd->HomeDirectory = buffer + name; pwd->Shell = buffer + name + home; pwd->Password = empty; pwd->UserInfo = empty;
+    pwd->UserId = account->user_id; pwd->GroupId = account->group_id;
+    return 0;
+}
+/* The account record is 1.5 KiB: it lives on the heap, because managed threads may run on small stacks. */
+PALEXPORT int32_t SystemNative_GetPwUidR(uint32_t uid, Passwd* pwd, char* buf, int32_t buflen) {
+    const dotnet_pal_accounts_ops *a = sn_accounts();
+    if (!a || !a->user_by_id) return current_user(pwd, buf, buflen, NULL, uid, false);
+    memset(pwd, 0, sizeof *pwd);
+    if (!buf || buflen < 0) return EINVAL;
+    dotnet_pal_account *account = SystemNative_Calloc(1, sizeof *account);
+    if (!account) return ENOMEM;
+    int32_t result = any_user(pwd, buf, buflen, a->user_by_id(uid, account, sizeof *account), account);
+    SystemNative_Free(account);
+    return result;
+}
 PALEXPORT int32_t SystemNative_GetPwNamR(const char* name, Passwd* pwd, char* buf, int32_t buflen) {
+    const dotnet_pal_accounts_ops *a = sn_accounts();
     if (!name) { memset(pwd, 0, sizeof *pwd); return EINVAL; }
-    return current_user(pwd, buf, buflen, name, 0, true);
+    if (!a || !a->user_by_name) return current_user(pwd, buf, buflen, name, 0, true);
+    memset(pwd, 0, sizeof *pwd);
+    if (!buf || buflen < 0) return EINVAL;
+    dotnet_pal_account *account = SystemNative_Calloc(1, sizeof *account);
+    if (!account) return ENOMEM;
+    int32_t result = any_user(pwd, buf, buflen, a->user_by_name((const uint8_t*)name, strlen(name), account, sizeof *account), account);
+    SystemNative_Free(account);
+    return result;
+}
+/* getgrouplist: the count on success; -1 with the count needed in *ngroups when the list does not fit. */
+PALEXPORT int32_t SystemNative_GetGroupList(const char* name, uint32_t group, uint32_t* groups, int32_t* ngroups) {
+    const dotnet_pal_accounts_ops *a = sn_accounts(); size_t count = 0;
+    if (!name || !groups || !ngroups || *ngroups < 0) return sn_fail(EINVAL);
+    if (!a || !a->user_groups) return sn_fail(ENOTSUP);
+    uint32_t status = a->user_groups((const uint8_t*)name, strlen(name), group, groups, (size_t)*ngroups, &count);
+    if (status == DOTNET_PAL_BUFFER_TOO_SMALL) { *ngroups = count > INT32_MAX ? INT32_MAX : (int32_t)count; return -1; }
+    if (status != DOTNET_PAL_OK) return sn_status(status);
+    *ngroups = (int32_t)count;
+    return (int32_t)count;
+}
+/* getgroups: the count, which is also the answer to a request with no room at all; EINVAL when the list does not fit. */
+PALEXPORT int32_t SystemNative_GetGroups(int32_t ngroups, uint32_t* groups) {
+    const dotnet_pal_accounts_ops *a = sn_accounts(); size_t count = 0;
+    if (ngroups < 0 || (ngroups > 0 && !groups)) return sn_fail(EINVAL);
+    if (!a || !a->process_groups) return sn_fail(ENOTSUP);
+    uint32_t status = a->process_groups(groups, (size_t)ngroups, &count);
+    if (status == DOTNET_PAL_BUFFER_TOO_SMALL) return ngroups == 0 ? (int32_t)count : sn_fail(EINVAL);
+    return status == DOTNET_PAL_OK ? (int32_t)count : sn_status(status);
+}
+/* Priorities of single processes. -1 is a niceness like any other, so success is told by errno, which the managed side
+ * clears before it asks. */
+PALEXPORT int32_t SystemNative_GetPriority(int32_t which, int32_t who) {
+    const dotnet_pal_priority_ops *p = sn_priority(); int32_t value = 0;
+    if (which != 0 /* PRIO_PROCESS */ || who < 0) return sn_fail(EINVAL);
+    if (!p) return sn_fail(ENOTSUP);
+    uint32_t status = p->get((uint64_t)who, &value);
+    if (status != DOTNET_PAL_OK) return sn_fail(status == DOTNET_PAL_NOT_FOUND ? ESRCH : sn_errno(status));
+    errno = 0;
+    return value;
+}
+PALEXPORT int32_t SystemNative_SetPriority(int32_t which, int32_t who, int32_t nice) {
+    const dotnet_pal_priority_ops *p = sn_priority();
+    if (which != 0 /* PRIO_PROCESS */ || who < 0) return sn_fail(EINVAL);
+    if (!p) return sn_fail(ENOTSUP);
+    /* setpriority clamps a value outside the range where the boundary rejects it. */
+    uint32_t status = p->set((uint64_t)who, nice < -20 ? -20 : nice > 19 ? 19 : nice);
+    return status == DOTNET_PAL_OK ? 0 : sn_fail(status == DOTNET_PAL_NOT_FOUND ? ESRCH : sn_errno(status));
 }
 
 /* The processors this process may run on, as the first bits of one machine word. Only the process itself can be asked,
@@ -220,7 +291,9 @@ static const struct { int32_t code; int32_t posix; uint32_t kind; } signals[] = 
 };
 #define SIGNAL_COUNT ((int)(sizeof signals / sizeof signals[0]))
 static PosixSignalHandler posix_handler;
+void sn_terminal_reapply(void);
 static TerminalInvalidationCallback terminal_invalidation;
+static int32_t console_listens; /* the console asked to hear of window changes and continuations, whatever managed code registers */
 static uint32_t registered; /* bit i: managed code registered for signals[i] */
 static int32_t installed;   /* 0 none, 1 in progress, 2 the notification handler is installed, 3 it could not be */
 static int index_of_code(int32_t code) { for (int i = 0; i < SIGNAL_COUNT; ++i) if (signals[i].code == code) return i; return -1; }
@@ -246,6 +319,7 @@ void sn_signal_dispatch(int32_t code) {
     int i = index_of_code(code);
     if (i < 0) return;
     if (code == SIGCHLD || code == SIGCONT || code == SIGWINCH) {
+        if (code != SIGWINCH) sn_terminal_reapply();
         TerminalInvalidationCallback invalidate = __atomic_load_n(&terminal_invalidation, __ATOMIC_ACQUIRE);
         if (invalidate) invalidate();
     }
@@ -268,6 +342,12 @@ static bool ensure_installed(const dotnet_pal_notifications_ops *n) {
         }
     }
 }
+static void sn_console_listen(void) {
+    const dotnet_pal_notifications_ops *n = notifications();
+    if (!n || !ensure_installed(n)) return;
+    __atomic_store_n(&console_listens, 1, __ATOMIC_RELEASE);
+    (void)n->enable(DOTNET_PAL_NOTIFY_WINDOW_CHANGE); (void)n->enable(DOTNET_PAL_NOTIFY_CONTINUE);
+}
 /* 1 when the registration is in effect. SIGCHLD needs no notification: child ends are reported by the process unit. */
 PALEXPORT int32_t SystemNative_EnablePosixSignalHandling(int signalCode) {
     const dotnet_pal_notifications_ops *n = notifications(); int i = index_of_code(signalCode);
@@ -284,51 +364,80 @@ PALEXPORT void SystemNative_DisablePosixSignalHandling(int signalCode) {
     const dotnet_pal_notifications_ops *n = notifications(); int i = index_of_code(signalCode);
     if (i < 0) return;
     (void)__atomic_and_fetch(&registered, ~(1u << i), __ATOMIC_ACQ_REL);
-    if (n && signals[i].kind != 0 && __atomic_load_n(&installed, __ATOMIC_ACQUIRE) == 2) (void)n->disable(signals[i].kind);
+    /* The console keeps listening to the two kinds that tell it its picture of the terminal is out of date. */
+    bool console = __atomic_load_n(&console_listens, __ATOMIC_ACQUIRE) && (signals[i].kind == DOTNET_PAL_NOTIFY_WINDOW_CHANGE || signals[i].kind == DOTNET_PAL_NOTIFY_CONTINUE);
+    if (n && signals[i].kind != 0 && !console && __atomic_load_n(&installed, __ATOMIC_ACQUIRE) == 2) (void)n->disable(signals[i].kind);
 }
 
+static void sn_console_listen(void);
 /* ---- the terminal --------------------------------------------------------------------------- */
 static const dotnet_pal_terminal_ops *terminal(void) {
     const dotnet_pal_api *a = sn_api();
     return sn_has(a, DOTNET_PAL_TERMINAL_API_SIZE, DOTNET_PAL_CAP_TERMINAL) ? &a->terminal : NULL;
 }
+/* The console of the BCL owns the terminal the way the reference implementation's does. The first read, or the first
+ * change of the break key, puts the terminal into raw mode, and there it stays: the BCL edits and echoes lines itself.
+ * It goes back to line mode while a child process uses it, and for good when the process exits. */
 static int32_t break_is_signal = 1; /* Ctrl+C interrupts unless the program asked to read it as input */
-static int32_t reading_raw;
-static int32_t mode_changed;
+static int32_t reading;             /* a read is in progress: a child started now is assumed not to use the terminal */
+static int32_t mode_changed;        /* this process has set a mode, so there is one to give back */
+static int32_t child_uses_terminal;
+static int32_t last_minimum = 1, last_timeout;
 static void apply_input_mode(uint32_t raw, uint32_t minimum, uint32_t timeout) {
     const dotnet_pal_terminal_ops *t = terminal();
     if (!t || !t->set_input_mode) return;
     __atomic_store_n(&mode_changed, 1, __ATOMIC_RELEASE);
+    if (raw) { __atomic_store_n(&last_minimum, (int32_t)minimum, __ATOMIC_RELEASE); __atomic_store_n(&last_timeout, (int32_t)timeout, __ATOMIC_RELEASE); }
     (void)t->set_input_mode(raw, minimum, timeout, __atomic_load_n(&break_is_signal, __ATOMIC_ACQUIRE) ? 0 : 1);
 }
-/* A program that ends while it reads keys, or with Ctrl+C taken as input, would leave its terminal without echo, line
- * editing or an interrupt key for whoever uses it next. The reference implementation restores the terminal from
- * atexit as well. */
+/* A program that ends while its terminal is in raw mode would leave it without echo, line editing or an interrupt key
+ * for whoever uses it next. The reference implementation restores the terminal from atexit as well. */
 static void restore_terminal(void) {
     const dotnet_pal_terminal_ops *t = terminal();
     if (t && t->set_input_mode && __atomic_exchange_n(&mode_changed, 0, __ATOMIC_ACQ_REL)) (void)t->set_input_mode(0, 0, 0, 0);
 }
+/* A continued process finds its terminal as whoever ran meanwhile left it; a child that used it may have changed it. */
+void sn_terminal_reapply(void) {
+    if (!__atomic_load_n(&mode_changed, __ATOMIC_ACQUIRE) || __atomic_load_n(&child_uses_terminal, __ATOMIC_ACQUIRE)) return;
+    apply_input_mode(1, (uint32_t)__atomic_load_n(&last_minimum, __ATOMIC_ACQUIRE), (uint32_t)__atomic_load_n(&last_timeout, __ATOMIC_ACQUIRE));
+}
 PALEXPORT int32_t SystemNative_InitializeTerminalAndSignalHandling(void) {
     static int32_t registered;
-    if (!__atomic_exchange_n(&registered, 1, __ATOMIC_ACQ_REL)) (void)atexit(restore_terminal);
+    if (!__atomic_exchange_n(&registered, 1, __ATOMIC_ACQ_REL)) {
+        (void)atexit(restore_terminal);
+        /* The console caches the window size and the terminal settings. A resized window and a continued process
+         * invalidate both, so these two kinds are listened to from here on, as the reference implementation installs
+         * its SIGWINCH and SIGCONT handlers at this point. A port without notifications keeps the first answer. */
+        sn_console_listen();
+    }
     return 1;
 }
-PALEXPORT void SystemNative_UninitializeTerminal(void) { if (__atomic_exchange_n(&reading_raw, 0, __ATOMIC_ACQ_REL)) apply_input_mode(0, 0, 0); }
+PALEXPORT void SystemNative_UninitializeTerminal(void) { restore_terminal(); }
 PALEXPORT void SystemNative_InitializeConsoleBeforeRead(uint8_t minChars, uint8_t decisecondsTimeout) {
-    __atomic_store_n(&reading_raw, 1, __ATOMIC_RELEASE);
+    __atomic_store_n(&reading, 1, __ATOMIC_RELEASE);
     apply_input_mode(1, minChars, decisecondsTimeout);
 }
-PALEXPORT void SystemNative_UninitializeConsoleAfterRead(void) { __atomic_store_n(&reading_raw, 0, __ATOMIC_RELEASE); apply_input_mode(0, 0, 0); }
+PALEXPORT void SystemNative_UninitializeConsoleAfterRead(void) { __atomic_store_n(&reading, 0, __ATOMIC_RELEASE); }
 PALEXPORT int32_t SystemNative_GetSignalForBreak(void) { return __atomic_load_n(&break_is_signal, __ATOMIC_ACQUIRE); }
 PALEXPORT int32_t SystemNative_SetSignalForBreak(int32_t signalForBreak) {
     __atomic_store_n(&break_is_signal, signalForBreak != 0, __ATOMIC_RELEASE);
-    /* Takes effect now, in whichever mode the terminal is: the default timing of line mode is the terminal's own. */
-    apply_input_mode(__atomic_load_n(&reading_raw, __ATOMIC_ACQUIRE) ? 1 : 0, 1, 0);
+    apply_input_mode(1, 1, 0);
     return 1;
 }
+/* Line mode while a child uses the terminal, raw mode again once none does; only when this process set a mode at all. */
+PALEXPORT void SystemNative_ConfigureTerminalForChildProcess(int32_t childUsesTerminal) {
+    if (__atomic_load_n(&reading, __ATOMIC_ACQUIRE)) return;
+    __atomic_store_n(&child_uses_terminal, childUsesTerminal != 0, __ATOMIC_RELEASE);
+    if (__atomic_load_n(&mode_changed, __ATOMIC_ACQUIRE)) apply_input_mode(childUsesTerminal ? 0 : 1, 1, 0);
+}
+/* In line mode a typed key is not input until its line ends, so the question is asked in raw mode. */
 PALEXPORT int32_t SystemNative_StdinReady(void) {
     const dotnet_pal_terminal_ops *t = terminal(); uint32_t ready = 0;
-    return t && t->input_ready && t->input_ready(&ready) == DOTNET_PAL_OK && ready;
+    if (!t || !t->input_ready) return 0;
+    SystemNative_InitializeConsoleBeforeRead(1, 0);
+    int32_t result = t->input_ready(&ready) == DOTNET_PAL_OK && ready;
+    SystemNative_UninitializeConsoleAfterRead();
+    return result;
 }
 PALEXPORT int32_t SystemNative_GetWindowSize(intptr_t fd, WinSize* windowSize) {
     const dotnet_pal_terminal_ops *t = terminal(); uint32_t columns = 0, rows = 0;
@@ -364,5 +473,4 @@ PALEXPORT void SystemNative_SetKeypadXmit(intptr_t fd, const char* terminfoStrin
     sn_unpin(object);
 }
 /* A child shares the parent's terminal settings; the boundary's input mode is per process, so there is nothing to hand over. */
-PALEXPORT void SystemNative_ConfigureTerminalForChildProcess(int32_t enable) { (void)enable; }
 PALEXPORT void SystemNative_SetDelayedSigChildConsoleConfigurationHandler(void (*callback)(void)) { (void)callback; }

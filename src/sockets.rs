@@ -14,6 +14,8 @@ use core::{ffi::c_void, mem, ptr};
 pub const CAP: u64 = 268435456;
 pub const IPV4: u32 = 1;
 pub const IPV6: u32 = 2;
+/// A Unix domain socket. Only `create` takes this family; its paths belong to the `local_sockets` group.
+pub const LOCAL: u32 = 3;
 pub const STREAM: u32 = 1;
 pub const DATAGRAM: u32 = 2;
 pub const SHUTDOWN_READ: u32 = 1;
@@ -67,6 +69,9 @@ impl Address {
         Self { family: IPV4 as u16, port, scope: 0, address: [octets[0], octets[1], octets[2], octets[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }
     }
     pub const fn v6(octets: [u8; 16], port: u16, scope: u32) -> Self { Self { family: IPV6 as u16, port, scope, address: octets } }
+    /// What an endpoint query, an accept or a receive may answer with: an IP address, or the bare family of a local
+    /// socket, whose path the `local_sockets` group reports.
+    pub fn reported(self) -> Option<Self> { if self.family as u32 == LOCAL { Some(Self { family: LOCAL as u16, ..Self::default() }) } else { self.normalized() } }
     /// The address with the bytes its family does not use cleared; `None` for an unknown family.
     pub fn normalized(mut self) -> Option<Self> {
         match self.family as u32 {
@@ -138,7 +143,7 @@ unsafe fn input(address: *const Address) -> Option<Address> {
 unsafe extern "C" fn create<S: Sockets>(family: u32, kind: u32, out: *mut *mut c_void) -> u32 {
     if !aligned_output(out) { return record(INVALID_ARGUMENT, 0); }
     unsafe { out.write(ptr::null_mut()) };
-    if !(IPV4..=IPV6).contains(&family) || !(STREAM..=DATAGRAM).contains(&kind) { return record(INVALID_ARGUMENT, 0); }
+    if !(IPV4..=LOCAL).contains(&family) || !(STREAM..=DATAGRAM).contains(&kind) { return record(INVALID_ARGUMENT, 0); }
     let status = match unsafe { S::create(family, kind) } {
         Ok(socket) if socket.is_null() => OS_ERROR,
         Ok(socket) => { unsafe { out.write(socket) }; OK }
@@ -167,7 +172,7 @@ unsafe extern "C" fn accept<S: Sockets>(socket: *mut c_void, out: *mut *mut c_vo
         Ok((accepted, _)) if accepted.is_null() => OS_ERROR,
         Ok((accepted, address)) => {
             // A peer the target cannot name stays the zero address; the connection is still good.
-            unsafe { out.write(accepted); peer.write(address.normalized().unwrap_or_default()); }
+            unsafe { out.write(accepted); peer.write(address.reported().unwrap_or_default()); }
             OK
         }
         Err(e) => e.status(),
@@ -200,7 +205,7 @@ unsafe extern "C" fn receive<S: Sockets>(socket: *mut c_void, data: *mut u8, cap
         Ok((done, _)) if done > capacity => OS_ERROR,
         Ok((done, sender)) => {
             unsafe { received.write(done) };
-            if let (false, Some(sender)) = (from.is_null(), sender.and_then(Address::normalized)) { unsafe { from.write(sender) }; }
+            if let (false, Some(sender)) = (from.is_null(), sender.and_then(Address::reported)) { unsafe { from.write(sender) }; }
             OK
         }
         Err(e) => e.status(),
@@ -215,7 +220,7 @@ unsafe fn endpoint(socket: *mut c_void, out: *mut Address, query: impl FnOnce() 
     if !aligned_output(out) { return record(INVALID_ARGUMENT, 9); }
     unsafe { out.write(Address::default()) };
     if socket.is_null() { return record(INVALID_ARGUMENT, 9); }
-    let status = match query().map(Address::normalized) {
+    let status = match query().map(Address::reported) {
         Ok(Some(address)) => { unsafe { out.write(address) }; OK }
         Ok(None) => OS_ERROR,
         Err(e) => e.status(),

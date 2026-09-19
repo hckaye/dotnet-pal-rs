@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- System.Console on an interactive terminal through the boundary: window size, key
+       reads in raw mode, Console.KeyAvailable, Ctrl+C as input and as Console.CancelKeyPress,
+       line reads, and a resized window. scripts/terminal-probe.sh runs it on a pseudo-terminal
+       and plays the keyboard. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RuntimeFrameworkVersion>10.0.12</RuntimeFrameworkVersion>
+    <PublishAot>true</PublishAot>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <StripSymbols>false</StripSymbols>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <InvariantTimezone>true</InvariantTimezone>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <IlcOptimizationPreference>Size</IlcOptimizationPreference>
+    <PalRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))</PalRoot>
+    <PalLib Condition="'$(PalLib)' == ''">$(PalRoot)/target/release/libdotnet_pal_rs.a</PalLib>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <LinkerArg Include="-Wl,--undefined=dotnet_pal_get_api" />
+    <NativeLibrary Include="$(PalLib)" />
+    <LinkerArg Include="-Wl,-Map=$(PalLinkMap)" Condition="'$(PalLinkMap)' != ''" />
+  </ItemGroup>
+  <!-- A small, single-core machine: see samples/ConsoleProbe. -->
+  <ItemGroup Condition="'$(PalSmallMachine)' == 'true'">
+    <RuntimeHostConfigurationOption Include="System.GC.RegionRange" Value="268435456" />
+    <RuntimeHostConfigurationOption Include="System.GC.HeapHardLimit" Value="134217728" />
+    <RuntimeHostConfigurationOption Include="System.GC.Concurrent" Value="false" />
+    <RuntimeHostConfigurationOption Include="System.GC.Server" Value="false" />
+  </ItemGroup>
+</Project>

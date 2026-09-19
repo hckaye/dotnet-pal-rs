@@ -130,15 +130,53 @@ the loopback interface must not reach a member on another one. `tests/sockets.c`
 each of the seven new socket options, reads it back and checks its effect on real
 traffic through the hop limit and the arrival interface the kernel reports. IPv6 group
 traffic runs only where the interface has IPv6 switched on, which a default Docker
-container has not. `scripts/facilities-probe.sh` runs `samples/FacilitiesProbe` the way
-`io-probe.sh` runs the I/O probe.
+container has not. `tests/local_sockets.c` binds, connects and talks through Unix domain
+sockets in a scratch directory and compares paths and the peer's user with
+`getsockname` and `SO_PEERCRED`; as root it checks the refusals a permission causes in a
+child that has given its privileges up. `tests/accounts.c` compares every account
+`getpwent` lists, by id and by name, and the group lists with `getgroups` and
+`getgrouplist`, the first in a child that has set its groups. `tests/priority.c`
+compares with `getpriority` and `/proc/<pid>/stat` for this process and for a child with
+several threads; lowering a nice value again needs `CAP_SYS_NICE`, which a default
+Docker container does not grant, and the test then asserts the refusal. `scripts/facilities-probe.sh` runs `samples/FacilitiesProbe` the way
+`io-probe.sh` runs the I/O probe, and `scripts/terminal-probe.sh` runs
+`samples/TerminalProbe` on a pseudo-terminal whose keyboard it plays.
+
+## x86-64 under emulation
+
+No x86-64 machine has run the suites. The same container image built for `linux/amd64`
+runs them on an ARM64 host under Rosetta emulation. Seventeen of the nineteen group
+suites pass there, among them `faults.sh` and `context.sh`, which take real faults and
+signals with the x86-64 frame, and so do the core tests and all tests of the `std` port
+and of `dotnet-pal-memfs` except the four named below. What fails is traced to three
+behaviours of the emulator, two of which a plain C program without any boundary code
+shows as well:
+
+- `posix_spawn` of a program that does not exist returns success and the child exits
+  with 127, where the kernel reports `ENOENT`. `processes.sh` and two tests of the `std`
+  processes provider expect `NOT_FOUND` there.
+- `rt_sigprocmask` with an unmapped pointer ends the process with a segmentation fault,
+  where the kernel answers `EFAULT`. The image group's readability probe relies on that
+  answer, so `platform.sh` and the `std` port's image test stop there.
+- An allocation of 10^15 bytes, which `dotnet-pal-memfs` expects the allocator to refuse,
+  ends the process with an error message of the emulator.
+
+These results say that the providers compile and behave on the x86-64 ABI (structure
+layouts, signal frames, system call numbers). They do not replace a run on x86-64
+hardware. The runtime turns faults into managed exceptions through the `faults` group on
+ARM64 only; the conversion for x86-64 is not written, because no x86-64 port without
+signals exists to execute it on, and this emulator is no substitute.
 
 ## Sanitizer coverage
 
-`sanitize.sh address` uses a pinned nightly solely for AddressSanitizer, rebuilding
-Rust core/compiler-builtins and instrumenting Rust and C/C++ boundary callers in
-the same process. It exercises Linux, host-kernel and linear contracts with leak
-checking. It does not instrument the managed NativeAOT runtime, replace the stable
+`sanitize.sh address` and `sanitize.sh thread` use a pinned nightly solely for the
+sanitizers, rebuilding Rust core/compiler-builtins and instrumenting Rust and C/C++
+boundary callers in the same process, for the architecture of the machine they run
+on. They exercise the Linux, host-kernel and linear contracts, and the conformance
+test of every Linux provider behind System.Native (files to priorities), with leak
+checking in the address run. Both have passed on Linux ARM64 in a container, which
+needs the clang sanitizer runtime (`libclang-rt-18-dev`), `--cap-add SYS_PTRACE` and
+`--security-opt seccomp=unconfined`. It does not instrument the managed NativeAOT runtime, replace the stable
 release compiler, or constitute a complete undefined-behavior proof. Review the
 sanitizer workflow result at the exact commit rather than assuming it passed.
 

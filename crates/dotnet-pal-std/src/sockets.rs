@@ -37,6 +37,14 @@
 //! refuses it, so 0 is refused here; macOS answers -1 for an IPv6 hop limit nobody
 //! set, which is reported as the system's default (net.inet6.ip6.hlim).
 //!
+//! A Unix domain socket is a socket of this provider made with the LOCAL family; the
+//! local_sockets provider binds and connects it. The handle says that it is one: the
+//! calls that take an IP address refuse it, its endpoints answer with the bare
+//! family, and the sender of what it receives is answered from the handle, because
+//! the OS names a local sender by whether it has a path (Linux names the sender of
+//! a stream that has one, macOS gives a datagram's sender without one an empty name;
+//! both measured). Windows has no provider for them: the family is UNSUPPORTED there.
+//!
 //! Names are resolved with getaddrinfo itself on Unix: std turns its failure code
 //! into text, which cannot tell a name without addresses from an answer that could
 //! not be obtained. On Windows std keeps the Winsock code, so `ToSocketAddrs` is
@@ -44,22 +52,30 @@
 use super::{borrow, boxed, take, Std};
 use dotnet_pal_rs::kernel::INFINITE;
 use dotnet_pal_rs::port::{self, Error, Result};
-use dotnet_pal_rs::sockets::{self, Address, PollEntry, DATAGRAM, IPV4, IPV6, POLL_ERROR, POLL_HANGUP, POLL_READ, POLL_WRITE, RECEIVE_PEEK, STREAM};
+use dotnet_pal_rs::sockets::{self, Address, PollEntry, DATAGRAM, IPV4, IPV6, LOCAL, POLL_ERROR, POLL_HANGUP, POLL_READ, POLL_WRITE, RECEIVE_PEEK, STREAM};
 use socket2::{Domain, MaybeUninitSlice, SockAddr, Type};
 use std::{collections::HashMap, ffi::c_void, io, mem::MaybeUninit, net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV6}, ptr};
 use std::{sync::{atomic::{AtomicBool, AtomicU32, Ordering}, OnceLock}, time::{Duration, Instant}};
 
-/// The network group's membership call takes these handles, hence the visibility.
-pub(crate) struct Socket { pub(crate) inner: socket2::Socket, blocking: AtomicBool, pub(crate) stream: bool, pub(crate) v6: bool, multicast_interface: AtomicU32 }
+/// The calls of the network and local_sockets groups take these handles, hence the visibility.
+pub(crate) struct Socket { pub(crate) inner: socket2::Socket, blocking: AtomicBool, pub(crate) stream: bool, pub(crate) v6: bool, pub(crate) local: bool, multicast_interface: AtomicU32 }
+/// What every endpoint of a local socket answers with: its path is the local_sockets group's to report.
+const BARE: Address = Address { family: LOCAL as u16, port: 0, scope: 0, address: [0; 16] };
 impl Socket {
-    fn wrap(inner: socket2::Socket, stream: bool, v6: bool) -> *mut c_void {
-        boxed(Self { inner, blocking: AtomicBool::new(true), stream, v6, multicast_interface: AtomicU32::new(0) })
+    fn wrap(inner: socket2::Socket, stream: bool, v6: bool, local: bool) -> *mut c_void {
+        boxed(Self { inner, blocking: AtomicBool::new(true), stream, v6, local, multicast_interface: AtomicU32::new(0) })
+    }
+    /// The socket, for a call that takes an IP address: a local socket has none to bind, reach or send to.
+    unsafe fn internet<'a>(socket: *mut c_void) -> Result<&'a Self> {
+        let socket = unsafe { borrow::<Self>(socket) }?;
+        if socket.local { Err(Error::InvalidArgument) } else { Ok(socket) }
     }
     /// `Err(Unsupported)` for an option the socket's protocol does not have, before the OS is asked.
     fn has(&self, option: u32) -> Result<()> {
         let missing = match option {
-            sockets::NO_DELAY | sockets::KEEP_ALIVE_IDLE | sockets::KEEP_ALIVE_INTERVAL | sockets::KEEP_ALIVE_COUNT => !self.stream,
-            sockets::MULTICAST_HOPS | sockets::MULTICAST_LOOPBACK | sockets::MULTICAST_INTERFACE => self.stream,
+            sockets::NO_DELAY | sockets::KEEP_ALIVE_IDLE | sockets::KEEP_ALIVE_INTERVAL | sockets::KEEP_ALIVE_COUNT => !self.stream || self.local,
+            sockets::MULTICAST_HOPS | sockets::MULTICAST_LOOPBACK | sockets::MULTICAST_INTERFACE => self.stream || self.local,
+            sockets::HOPS => self.local,
             sockets::IPV6_ONLY => !self.v6,
             _ => false,
         };
@@ -119,10 +135,10 @@ fn error(e: io::Error) -> Error {
 /// The failure of a transfer or an accept. Unix reports an expired RECEIVE or SEND
 /// timeout with the error of a non-blocking socket that has nothing yet; the mode
 /// the handle was put in tells them apart without asking the OS.
-fn waited(socket: &Socket, e: io::Error) -> Error {
+pub(crate) fn waited(socket: &Socket, e: io::Error) -> Error {
     match error(e) { Error::WouldBlock if socket.blocking.load(Ordering::Relaxed) => Error::Timeout, other => other }
 }
-fn retry<T>(mut call: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+pub(crate) fn retry<T>(mut call: impl FnMut() -> io::Result<T>) -> io::Result<T> {
     loop { match call() { Err(e) if e.kind() == io::ErrorKind::Interrupted => continue, other => return other } }
 }
 
@@ -140,7 +156,10 @@ fn boundary(address: SocketAddr) -> Address {
         SocketAddr::V6(a) => Address::v6(a.ip().octets(), a.port(), a.scope_id()),
     }
 }
-fn endpoint(address: io::Result<SockAddr>) -> Result<Address> { address.map_err(error)?.as_socket().map(boundary).ok_or(Error::Os) }
+fn endpoint(socket: &Socket, address: io::Result<SockAddr>) -> Result<Address> {
+    let address = address.map_err(error)?;
+    if socket.local { Ok(BARE) } else { address.as_socket().map(boundary).ok_or(Error::Os) }
+}
 
 #[cfg(unix)]
 mod ready {
@@ -458,12 +477,18 @@ fn host() -> Result<Vec<u8>> {
 
 impl port::Sockets for Std {
     unsafe fn create(family: u32, kind: u32) -> Result<*mut c_void> {
-        let domain = match family { IPV4 => Domain::IPV4, IPV6 => Domain::IPV6, _ => return Err(Error::InvalidArgument) };
+        let domain = match family {
+            IPV4 => Domain::IPV4, IPV6 => Domain::IPV6,
+            LOCAL if cfg!(unix) => Domain::UNIX,
+            // No local_sockets provider could bind or connect it.
+            LOCAL => return Err(Error::Unsupported),
+            _ => return Err(Error::InvalidArgument),
+        };
         let shape = match kind { STREAM => Type::STREAM, DATAGRAM => Type::DGRAM, _ => return Err(Error::InvalidArgument) };
-        Ok(Socket::wrap(socket2::Socket::new(domain, shape, None).map_err(error)?, kind == STREAM, family == IPV6))
+        Ok(Socket::wrap(socket2::Socket::new(domain, shape, None).map_err(error)?, kind == STREAM, family == IPV6, family == LOCAL))
     }
     unsafe fn close(socket: *mut c_void) -> Result<()> { drop(unsafe { take::<Socket>(socket) }?); Ok(()) }
-    unsafe fn bind(socket: *mut c_void, address: &Address) -> Result<()> { unsafe { borrow::<Socket>(socket) }?.inner.bind(&native(address)?).map_err(error) }
+    unsafe fn bind(socket: *mut c_void, address: &Address) -> Result<()> { unsafe { Socket::internet(socket) }?.inner.bind(&native(address)?).map_err(error) }
     unsafe fn listen(socket: *mut c_void, backlog: u32) -> Result<()> {
         unsafe { borrow::<Socket>(socket) }?.inner.listen(backlog.min(i32::MAX as u32) as i32).map_err(error)
     }
@@ -472,10 +497,10 @@ impl port::Sockets for Std {
         let (inner, peer) = retry(|| listener.inner.accept()).map_err(|e| waited(listener, e))?;
         // Outside Linux an accepted socket inherits the listener's non-blocking mode; the contract starts it blocking.
         if !listener.blocking.load(Ordering::Relaxed) { inner.set_nonblocking(false).map_err(error)?; }
-        Ok((Socket::wrap(inner, listener.stream, listener.v6), peer.as_socket().map(boundary).unwrap_or_default()))
+        Ok((Socket::wrap(inner, listener.stream, listener.v6, listener.local), if listener.local { BARE } else { peer.as_socket().map(boundary).unwrap_or_default() }))
     }
     unsafe fn connect(socket: *mut c_void, address: &Address) -> Result<()> {
-        let socket = unsafe { borrow::<Socket>(socket) }?;
+        let socket = unsafe { Socket::internet(socket) }?;
         match socket.inner.connect(&native(address)?) {
             Ok(()) => Ok(()),
             // An interrupted connect carries on in the OS; a second call would report EALREADY. Wait for its outcome instead.
@@ -489,7 +514,7 @@ impl port::Sockets for Std {
         }
     }
     unsafe fn send(socket: *mut c_void, data: *const u8, size: usize, to: Option<&Address>) -> Result<usize> {
-        let socket = unsafe { borrow::<Socket>(socket) }?;
+        let socket = if to.is_some() { unsafe { Socket::internet(socket) } } else { unsafe { borrow::<Socket>(socket) } }?;
         let (bytes, to) = (unsafe { std::slice::from_raw_parts(data, size) }, to.map(native).transpose()?);
         retry(|| match &to { Some(to) => socket.inner.send_to_with_flags(bytes, to, ready::SEND), None => socket.inner.send_with_flags(bytes, ready::SEND) })
             .map_err(|e| waited(socket, e))
@@ -500,15 +525,15 @@ impl port::Sockets for Std {
         // The vectored call is the one `socket2` lets end in a truncated datagram on Windows, where Winsock calls that an error.
         let mut parts = [MaybeUninitSlice::new(unsafe { std::slice::from_raw_parts_mut(out.cast::<MaybeUninit<u8>>(), capacity) })];
         let (done, _, sender) = retry(|| socket.inner.recv_from_vectored_with_flags(&mut parts, flags)).map_err(|e| waited(socket, e))?;
-        // A stream names no sender: the OS leaves the address empty and the answer is `None`.
-        Ok((done, sender.as_socket().map(boundary)))
+        // A stream names no sender: the OS leaves the address empty and the answer is `None`. A local datagram has a local sender.
+        Ok((done, if socket.local { (!socket.stream).then_some(BARE) } else { sender.as_socket().map(boundary) }))
     }
     unsafe fn shutdown(socket: *mut c_void, how: u32) -> Result<()> {
         let how = match how { sockets::SHUTDOWN_READ => Shutdown::Read, sockets::SHUTDOWN_WRITE => Shutdown::Write, sockets::SHUTDOWN_BOTH => Shutdown::Both, _ => return Err(Error::InvalidArgument) };
         unsafe { borrow::<Socket>(socket) }?.inner.shutdown(how).map_err(error)
     }
-    unsafe fn local_address(socket: *mut c_void) -> Result<Address> { endpoint(unsafe { borrow::<Socket>(socket) }?.inner.local_addr()) }
-    unsafe fn peer_address(socket: *mut c_void) -> Result<Address> { endpoint(unsafe { borrow::<Socket>(socket) }?.inner.peer_addr()) }
+    unsafe fn local_address(socket: *mut c_void) -> Result<Address> { let socket = unsafe { borrow::<Socket>(socket) }?; endpoint(socket, socket.inner.local_addr()) }
+    unsafe fn peer_address(socket: *mut c_void) -> Result<Address> { let socket = unsafe { borrow::<Socket>(socket) }?; endpoint(socket, socket.inner.peer_addr()) }
     unsafe fn set_blocking(socket: *mut c_void, blocking: bool) -> Result<()> {
         let socket = unsafe { borrow::<Socket>(socket) }?;
         socket.inner.set_nonblocking(!blocking).map_err(error)?;

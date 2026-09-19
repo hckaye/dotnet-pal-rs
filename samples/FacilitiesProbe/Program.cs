@@ -130,6 +130,10 @@ static class Program
         byte[] grown = File.ReadAllBytes(Path.Combine(root, "grown.bin"));
         Check(grown.Length == 2 * page + 1 && grown[2 * page] == 0x5C && grown[0] == 0, "a map with a capacity: length " + grown.Length);
         // Memory shared between views without a file of the caller's: the BCL backs it with an unlinked temporary file here.
+#if EXPECT_NO_ENTROPY
+        // The BCL names that file with a new Guid, which a machine without an entropy source cannot make.
+        Check(Throws<System.Security.Cryptography.CryptographicException>(() => MemoryMappedFile.CreateNew(null, 65536)), "an anonymous map without entropy");
+#else
         using (var map = MemoryMappedFile.CreateNew(null, 65536))
         {
             using var first = map.CreateViewAccessor();
@@ -137,8 +141,13 @@ static class Program
             first.Write(4096 + 100, 0x12345678);
             Check(second.ReadInt32(100) == 0x12345678, "two views of an anonymous map do not share memory");
         }
+#endif
         Check(Throws<PlatformNotSupportedException>(() => MemoryMappedFile.CreateNew("named", 4096)), "named maps are not a Unix facility");
+#if EXPECT_NO_ENTROPY
+        Console.WriteLine("memory-mapped files pass: shared, copy-on-write, read-only and grown maps; no anonymous map without entropy");
+#else
         Console.WriteLine("memory-mapped files pass: shared, copy-on-write, read-only, grown and anonymous maps");
+#endif
 #else
         Check(Throws<IOException>(() => { using var map = MemoryMappedFile.CreateFromFile(path, FileMode.Open); using var view = map.CreateViewAccessor(); }), "a view without the mappings group");
         Console.WriteLine("file mapping absent, as expected");
@@ -222,6 +231,13 @@ static class Program
         sender.Send(new byte[] { 9 }, 1, new IPEndPoint(group, port));
         receiver.Client.ReceiveTimeout = 400;
         Check(Throws<SocketException>(() => receiver.Receive(ref from)), "a datagram arrived after the group was left");
+        // Gateways, statistics and listeners are not part of the network group: on Linux the BCL reads them from /proc and
+        // /sys, which reach it through the files group.
+        int gateways = interfaces.Sum(i => i.GetIPProperties().GatewayAddresses.Count);
+        long sentBytes = wired.GetIPStatistics().BytesSent;
+        Check(sentBytes > 0, "bytes sent through " + wired.Name + ": " + sentBytes);
+        Check(IPGlobalProperties.GetIPGlobalProperties().GetActiveUdpListeners().Any(l => l.Port == port), "the receiver is not among the active UDP listeners");
+        Console.WriteLine("gateways=" + gateways + " bytes sent through " + wired.Name + "=" + sentBytes);
         // UdpClient's IPv4 overload names the interface by one of its addresses, which System.Native translates to the index.
         IPAddress? own = wired.GetIPProperties().UnicastAddresses.Select(a => a.Address).FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork);
         if (own != null)
@@ -246,6 +262,60 @@ static class Program
 #endif
     }
 
+    // ---- Unix domain sockets and named pipes ------------------------------------------------------------------
+    private static void Local()
+    {
+#if EXPECT_LOCAL
+        string root = Scratch("local");
+        string path = Path.Combine(root, "probe.sock");
+        Check(Socket.OSSupportsUnixDomainSockets, "Unix domain sockets are reported as unsupported");
+        using (var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified))
+        {
+            listener.Bind(new UnixDomainSocketEndPoint(path));
+            listener.Listen(4);
+            Check(File.Exists(path), "the bound path is not in the file system");
+            Check(listener.LocalEndPoint is UnixDomainSocketEndPoint bound && bound.ToString() == path, "local end point of the listener: " + listener.LocalEndPoint);
+            Task<Socket> accepting = listener.AcceptAsync();
+            using var client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            client.ConnectAsync(new UnixDomainSocketEndPoint(path)).Wait(5000);
+            Check(accepting.Wait(5000), "the connection was not accepted");
+            using Socket server = accepting.Result;
+            client.Send("ping"u8);
+            byte[] buffer = new byte[16];
+            Check(server.Receive(buffer) == 4 && buffer.AsSpan(0, 4).SequenceEqual("ping"u8), "bytes from the client");
+            server.SendAsync("pong!"u8.ToArray()).Wait(5000);
+            Check(client.ReceiveAsync(buffer).Wait(5000) && buffer.AsSpan(0, 5).SequenceEqual("pong!"u8), "bytes from the server");
+            Check(client.RemoteEndPoint is UnixDomainSocketEndPoint remote && remote.ToString() == path, "remote end point of the client: " + client.RemoteEndPoint);
+            Check(Throws<SocketException>(() => { using var second = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified); second.Bind(new UnixDomainSocketEndPoint(path)); }),
+                "a second socket was bound to the same path");
+        }
+        Check(Throws<SocketException>(() => { using var nobody = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified); nobody.Connect(new UnixDomainSocketEndPoint(Path.Combine(root, "missing.sock"))); }),
+            "a connection to a path nobody listens on");
+
+        // Named pipes are Unix domain sockets below the temporary directory; CurrentUserOnly asks for the user at the other end.
+        string name = "facilities-probe-" + Environment.ProcessId;
+        using (var pipeServer = new System.IO.Pipes.NamedPipeServerStream(name, System.IO.Pipes.PipeDirection.InOut, 1, System.IO.Pipes.PipeTransmissionMode.Byte,
+            System.IO.Pipes.PipeOptions.Asynchronous | System.IO.Pipes.PipeOptions.CurrentUserOnly))
+        {
+            Task waiting = pipeServer.WaitForConnectionAsync();
+            using var pipeClient = new System.IO.Pipes.NamedPipeClientStream(".", name, System.IO.Pipes.PipeDirection.InOut, System.IO.Pipes.PipeOptions.CurrentUserOnly);
+            pipeClient.Connect(5000);
+            Check(waiting.Wait(5000), "the named pipe server saw no client");
+            pipeClient.Write("question"u8);
+            byte[] said = new byte[16];
+            Check(pipeServer.Read(said, 0, 8) == 8 && said.AsSpan(0, 8).SequenceEqual("question"u8), "bytes through the named pipe");
+            pipeServer.Write("answer"u8);
+            Check(pipeClient.Read(said, 0, 6) == 6 && said.AsSpan(0, 6).SequenceEqual("answer"u8), "bytes back through the named pipe");
+            Check(pipeServer.GetImpersonationUserName() == Environment.UserName, "the user at the other end of the pipe: " + pipeServer.GetImpersonationUserName());
+        }
+        Directory.Delete(root, recursive: true);
+        Console.WriteLine("Unix domain sockets and named pipes pass");
+#else
+        Check(!Socket.OSSupportsUnixDomainSockets, "Unix domain sockets are reported without the local sockets group");
+        Console.WriteLine("local sockets absent, as expected");
+#endif
+    }
+
     private static int Main()
     {
         Console.WriteLine("FACILITIES PROBE start");
@@ -253,6 +323,7 @@ static class Program
         Mappings();
         Volumes();
         Network();
+        Local();
         Console.WriteLine(s_failures == 0 ? "FACILITIES PROBE PASS" : "FACILITIES PROBE FAIL failures=" + s_failures);
         return s_failures == 0 ? 0 : 1;
     }

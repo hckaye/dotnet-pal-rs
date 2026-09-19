@@ -217,8 +217,11 @@ static uint32_t membership(void *socket, const dotnet_pal_socket_address *group,
     if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &length) != 0) return DOTNET_PAL_INVALID_ARGUMENT;
     length = sizeof domain;
     if (getsockopt(fd, SOL_SOCKET, SO_DOMAIN, &domain, &length) != 0) return DOTNET_PAL_INVALID_ARGUMENT;
-    int v6 = group->family == DOTNET_PAL_FAMILY_IPV6;
-    if (type != SOCK_DGRAM || domain != (v6 ? AF_INET6 : AF_INET)) return DOTNET_PAL_INVALID_ARGUMENT;
+    int v6 = group->family == DOTNET_PAL_FAMILY_IPV6, only = 1; length = sizeof only;
+    /* An IPv6 socket that carries both families takes an IPv4 group at the IPv4 level. The kernel lets an IPv6-only socket join
+     * there too and delivers nothing to it, so the socket is asked which it is. */
+    int dual = !v6 && domain == AF_INET6 && getsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &only, &length) == 0 && !only;
+    if (type != SOCK_DGRAM || (domain != (v6 ? AF_INET6 : AF_INET) && !dual)) return DOTNET_PAL_INVALID_ARGUMENT;
     struct group_req request; memset(&request, 0, sizeof request);
     request.gr_interface = interface_index;
     if (v6) {

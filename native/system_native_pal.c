@@ -325,14 +325,10 @@ PALEXPORT char* SystemNative_GetEnv(const char* variable) {
 
 /* ---- process facilities the boundary does not have --------------------------------- */
 PALEXPORT int32_t SystemNative_SetEUid(uint32_t euid) { (void)euid; return fail(ENOTSUP); }
-PALEXPORT int32_t SystemNative_GetGroupList(const char* name, uint32_t group, uint32_t* groups, int32_t* ngroups) { (void)name; (void)group; (void)groups; (void)ngroups; return fail(ENOTSUP); }
-PALEXPORT int32_t SystemNative_GetGroups(int32_t ngroups, uint32_t* groups) { (void)ngroups; (void)groups; return fail(ENOTSUP); }
 PALEXPORT char* SystemNative_GetGroupName(uint32_t gid) { (void)gid; return NULL; }
 PALEXPORT const char* SystemNative_SearchPath(int32_t folderId) { (void)folderId; return NULL; }
 PALEXPORT const char* SystemNative_SearchPath_TempDirectory(void) { return NULL; }
 PALEXPORT int32_t SystemNative_GetSid(int32_t pid) { (void)pid; return fail(ENOTSUP); }
-PALEXPORT int32_t SystemNative_GetPriority(int32_t which, int32_t who) { (void)which; (void)who; return fail(ENOTSUP); }
-PALEXPORT int32_t SystemNative_SetPriority(int32_t which, int32_t who, int32_t nice) { (void)which; (void)who; (void)nice; return fail(ENOTSUP); }
 PALEXPORT int64_t SystemNative_PathConf(const char* path, int32_t name) { (void)path; (void)name; return fail(ENOTSUP); }
 
 /* ---- diagnostics output -------------------------------------------------------- */
