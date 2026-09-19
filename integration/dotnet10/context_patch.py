@@ -9,7 +9,8 @@ HARDWARE='src/coreclr/nativeaot/Runtime/unix/HardwareExceptions.cpp'
 SIGNALS='src/coreclr/nativeaot/Runtime/unix/UnixSignals.cpp'
 HEADER='src/coreclr/nativeaot/Runtime/unix/UnixSignals.h'
 THREAD='src/coreclr/nativeaot/Runtime/thread.cpp'
-FILES=(SIGNALS,HEADER,THREAD,HARDWARE)
+GC_STRUCTS='src/coreclr/gc/env/gcenv.structs.h'
+FILES=(SIGNALS,HEADER,THREAD,HARDWARE,GC_STRUCTS)
 def guarded(original,replacement):
     return '#ifdef DOTNET_PAL_NATIVE_CONTEXT\n'+replacement+'\n#else\n'+original+'\n#endif'
 def function(text,name,body):
@@ -54,4 +55,18 @@ def pal(text):
     for required in ['GetCurrentThreadIfAvailableAsyncSafe','doInlineSuspend','g_previousActivationHandler.sa_sigaction(code, siginfo, context)']:
         if required not in text:raise ValueError('serviced activation semantics missing: '+required)
     return '#ifdef DOTNET_PAL_NATIVE_CONTEXT\n#include "context_adapter.h"\n#endif\n'+text
-TRANSFORMS={SIGNALS:signals,HEADER:header,THREAD:thread,HARDWARE:hardware}
+def gc_structs(text):
+    if 'dotnet_pal::ThreadIdentity' in text or text.count('class EEThreadId\n{') != 2:
+        raise ValueError('GC thread identity definitions changed or were already patched')
+    # Replace only the Unix definition; preserve the Windows class and all
+    # non-NativeAOT users of this shared GC header.
+    begin=text.index('class EEThreadId\n{',text.index('#ifdef TARGET_UNIX'))
+    end=text.index('\n};',begin)+len('\n};')
+    original=text[begin:end]
+    if original.count('pthread_self()')!=2 or original.count('pthread_equal(')!=1:
+        raise ValueError('GC thread identity call sites changed')
+    replacement='''#include "context_adapter.h"
+#include "thread_identity.h"
+class EEThreadId final : public dotnet_pal::ThreadIdentity<dotnet_pal_context::thread_token> {};'''
+    return text[:begin]+guarded(original,replacement)+text[end:]
+TRANSFORMS={SIGNALS:signals,HEADER:header,THREAD:thread,HARDWARE:hardware,GC_STRUCTS:gc_structs}

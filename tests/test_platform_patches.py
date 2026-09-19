@@ -25,17 +25,6 @@ class TopologyPatchTests(unittest.TestCase):
         with self.assertRaises(ValueError): topology_patch.gc('bool GCToOSInterface::Initialize()\n{\n    x;\n}\n')
         with self.assertRaises(ValueError): topology_patch.gc('#ifdef DOTNET_PAL_TOPOLOGY')
 
-    def test_thread_identity_routes_through_runtime_group(self):
-        old = topology_patch.structs.__code__.co_consts
-        text = ("class EEThreadId\n{\n    pthread_t m_id;\n    // Indicates whether the m_id is valid or not. pthread_t doesn't have any\n"
-                "    // portable \"invalid\" value.\n    bool m_isValid;\n\npublic:\n    bool IsCurrentThread()\n    {\n"
-                "        return m_isValid && pthread_equal(m_id, pthread_self());\n    }\n\n    void SetToCurrentThread()\n    {\n"
-                "        m_id = pthread_self();\n        m_isValid = true;\n    }\n")
-        result = topology_patch.structs(text)
-        self.assertIn('dotnet_pal_runtime::identity(true)', result)
-        self.assertIn('#else\nclass EEThreadId\n{\n    pthread_t m_id;', result)
-        self.assertIsNotNone(old)
-
     def test_pal_cpu_count_and_cgroup_init(self):
         text = ('bool PalInit()\n{\n    InitializeCpuCGroup();\n    x;\n}\n'
                 'void InitializeCurrentProcessCpuCount()\n{\n    old();\n}\n')

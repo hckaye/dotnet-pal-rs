@@ -71,7 +71,7 @@ for profile in workstation server; do
   [[ "$profile" != server ]] || collector=ServerGC
   # The strict gate: the rebuilt runtime and minipal archives reference only the
   # boundary and the reviewed non-OS contracts (integration/dotnet10/reviewed_references.json).
-  python3 scripts/audit_dependencies.py --require-isolated \
+  python3 scripts/audit_dependencies.py --require-isolated --forbid-runtime-symbol pthread_self \
     --runtime "$overlay/libRuntime.$collector.a" --runtime "$overlay/libaotminipal.a" --pal target/release/libdotnet_pal_rs.a \
     --binary "artifacts/qualification/$profile-linux/GcProbe" \
     --output "artifacts/qualification/$profile-linux/dependency-inventory.log"

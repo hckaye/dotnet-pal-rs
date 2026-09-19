@@ -359,3 +359,13 @@ production readiness, support for all Rust targets or upstream servicing support
 - [Rust target support](https://doc.rust-lang.org/rustc/platform-support.html)
 - [WASI Preview 1](https://github.com/WebAssembly/WASI/tree/wasi-0.1/preview1)
 - [Rust sanitizers](https://doc.rust-lang.org/nightly/unstable-book/compiler-flags/sanitizer.html)
+
+## The desktop std port on Windows
+
+`crates/dotnet-pal-std` builds on Windows, and the `windows-std` workflow job runs its
+provider tests there. The groups this repository added last carry no Windows
+implementation: file mappings, volumes, network information, local sockets, accounts,
+packet information and children under another identity are absent there, and change
+watching compares directory listings, as it does on macOS. A green job says the tests of
+the providers that do exist passed; it establishes no managed NativeAOT support on
+Windows.

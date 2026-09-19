@@ -13,9 +13,8 @@ GC = "src/coreclr/gc/unix/gcenv.unix.cpp"
 CGROUP = "src/coreclr/gc/unix/cgroup.cpp"
 CGROUP_CPU = "src/coreclr/nativeaot/Runtime/unix/cgroupcpu.cpp"
 NUMA = "src/coreclr/gc/unix/numasupport.cpp"
-STRUCTS = "src/coreclr/gc/env/gcenv.structs.h"
 PAL = "src/coreclr/nativeaot/Runtime/unix/PalUnix.cpp"
-FILES = (CGROUP, CGROUP_CPU, NUMA, STRUCTS)
+FILES = (CGROUP, CGROUP_CPU, NUMA)
 
 
 def guarded(original, replacement, marker=MARKER):
@@ -40,17 +39,6 @@ def compiled_out(text, what):
 def cgroup(text): return compiled_out(text, "cgroup")
 def cgroup_cpu(text): return compiled_out(text, "cgroupcpu")
 def numa(text): return compiled_out(text, "numasupport")
-
-
-def structs(text):
-    old = ("class EEThreadId\n{\n    pthread_t m_id;\n    // Indicates whether the m_id is valid or not. pthread_t doesn't have any\n"
-           "    // portable \"invalid\" value.\n    bool m_isValid;\n\npublic:\n    bool IsCurrentThread()\n    {\n"
-           "        return m_isValid && pthread_equal(m_id, pthread_self());\n    }\n\n    void SetToCurrentThread()\n    {\n"
-           "        m_id = pthread_self();\n        m_isValid = true;\n    }")
-    new = ('#include "runtime_adapter.h"\nclass EEThreadId\n{\n    uint64_t m_id;\n    bool m_isValid;\n\npublic:\n'
-           "    bool IsCurrentThread()\n    {\n        return m_isValid && m_id == dotnet_pal_runtime::identity(true);\n    }\n\n"
-           "    void SetToCurrentThread()\n    {\n        m_id = dotnet_pal_runtime::identity(true);\n        m_isValid = true;\n    }")
-    return once(text, old, "#ifdef DOTNET_PAL_RUNTIME\n" + new + "\n#else\n" + old + "\n#endif")
 
 
 INITIALIZE = """    if (!dotnet_pal_kernel::api() || !dotnet_pal_gc::api() || !dotnet_pal_topology::initialize()) return false;
@@ -159,4 +147,4 @@ def pal(text):
     return f'#ifdef {MARKER}\n#include "topology_adapter.h"\n#endif\n' + text
 
 
-TRANSFORMS = {CGROUP: cgroup, CGROUP_CPU: cgroup_cpu, NUMA: numa, STRUCTS: structs}
+TRANSFORMS = {CGROUP: cgroup, CGROUP_CPU: cgroup_cpu, NUMA: numa}

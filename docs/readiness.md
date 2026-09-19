@@ -9,6 +9,7 @@ The following gates describe what the executable suites actually establish.
 | Gate | Implementation / evidence producer |
 | --- | --- |
 | Native VM and host replacement | C ABI tests, GC negative/positive controls, Linux x64/ARM64 |
+| Machine measurements and CPU placement | Neutral CPU lists and memory queries; Linux and host implementations; source adapters preserve cgroup policy |
 | Clocks, sleep, yield | Linux, immutable host tables, real WASIp1 clock/error tests |
 | Events, recursive locks, threads, TLS, stacks, barriers | Linux and host-kernel contracts; native runtime/GC source adapters |
 | Native source builds | Both WorkstationGC and ServerGC archives; actual x64/ARM64 execution without --wrap |
@@ -81,8 +82,10 @@ A completed table row is not a claim that every method in its subsystem uses Rus
    components, WebAssembly-GC reference objects, files, sockets, DOM access and
    JavaScript interop beyond the five boundary imports are not implemented or
    qualified. Managed OOM/finalizer qualification in Wasm does not yet match the
-   wider native suite. The desktop `std` port has executed its table test on
-   Linux and macOS only; its Windows providers compile but have not run.
+   wider native suite. The desktop `std` port's tests have been executed by hand on
+   Linux and macOS; the `windows-std` workflow job runs them on Windows, where the
+   providers of this repository's newer groups were compile-checked only, so that
+   job's result belongs to the revision and is not assumed here.
    NUMA-aware heap placement is not exposed by the boundary on any target.
 5. **Product qualification.** A maintained upstream release must be selected and
    re-audited, the actual application's needed BCL surface must be tested, and
