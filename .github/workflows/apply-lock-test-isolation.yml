@@ -1,0 +1,47 @@
+name: apply-lock-test-isolation
+on:
+  push:
+    branches: ['fix/validation-and-baremetal-memory']
+    paths: ['.github/workflows/apply-lock-test-isolation.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.repository == 'hckaye/dotnet-pal-rs'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/validation-and-baremetal-memory
+      - name: Apply only the reviewed test-isolation change
+        shell: bash
+        run: |
+          set -euo pipefail
+          path=crates/dotnet-pal-std/tests/table.rs
+          test "$(git hash-object "$path")" = c1e15e2ac7168aaf37cc922da8e24c5036ba1e72
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/dotnet-pal-std/tests/table.rs')
+          text = p.read_text()
+          old = 'fn api() ->'
+          assert text.count(old) == 1
+          text = text.replace(old, '''// A child temporarily inherits all open file descriptions between fork/clone
+          // and exec, even for CLOEXEC descriptors. Do not overlap process creation with
+          // tests that require close() to close the LAST description holding a file lock.
+          // Only independent test scheduling is serialized; the lock test's own waiting
+          // thread and the fault test's worker thread remain concurrent.
+          static PROCESS_CREATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+          fn api() ->''', 1)
+          for signature in ['    fn files_change_attributes_link_and_lock() {\n',
+                            '    fn dies(mode: u32) -> (Option<i32>, usize) {\n']:
+              assert text.count(signature) == 1
+              text = text.replace(signature, signature + '        let _process_creation = super::PROCESS_CREATION.lock().unwrap_or_else(|e| e.into_inner());\n', 1)
+          p.write_text(text)
+          PY
+          test "$(git hash-object "$path")" = caf1f16e48b63d5b312e1c43446b391c1c628d12
+          git diff --check
+          git add -- "$path"
+          git -c user.name='hckaye' -c user.email='hckaye@users.noreply.github.com' commit -m 'Serialize descriptor-sensitive tests with child creation'
+          git push origin HEAD:refs/heads/fix/validation-and-baremetal-memory
