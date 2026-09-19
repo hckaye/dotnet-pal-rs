@@ -117,8 +117,9 @@ Linux backend makes the OS calls. The BCL native layer on the boundary covers th
 console and the terminal, files and directories with links, modes, times and locks,
 TCP/UDP sockets with multicast, the environment and system facts, signal
 registrations, child processes, change watching, file mappings, volumes, network
-interfaces, Unix domain sockets, accounts and priorities; sessions, resource limits, raw
-sockets, control messages and network change events are not carried. See [platform](platform.md), [io](io.md),
+interfaces, Unix domain sockets, packet information, raw ICMP sockets, accounts, priorities
+and children under another identity; sessions, resource limits, other raw sockets and
+network change events are not carried. See [platform](platform.md), [io](io.md),
 [system](system.md) and [facilities](facilities.md).
 
 Code generation, target calling conventions, relocation/metadata formats, startup

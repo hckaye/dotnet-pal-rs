@@ -98,14 +98,14 @@ error-code translation and diagnostics. `native/system_native_io.c` has the desc
 table, the standard streams, files and directories over the `files` group, change watching,
 file mappings and volumes. `native/system_native_net.c` has sockets, readiness events and
 name resolution over the `sockets` group, network interfaces, reverse lookup and
-multicast membership over the `network` group, and Unix domain sockets over the
-`local_sockets` group. `native/system_native_sys.c` has the
+multicast membership over the `network` group, Unix domain sockets over the
+`local_sockets` group, and packet information over the `packets` group. `native/system_native_sys.c` has the
 environment enumeration, OS, user and process facts, accounts, group lists and priorities,
 signal registrations over the `notifications` group, the terminal and module loading. `native/system_native_proc.c` has
-child processes and their pipes. [io](io.md), [system](system.md) and
+child processes, also under another identity, and their pipes. [io](io.md), [system](system.md) and
 [facilities](facilities.md) describe the groups behind them. The facilities probe links 224
-entry points, all from these units. What the boundary does not carry (sessions, resource limits, raw sockets, control
-messages, network change events, a child started as another user) reports `ENOTSUP`,
+entry points, all from these units. What the boundary does not carry (sessions, resource limits, raw sockets other than ICMP,
+control messages other than packet information, network change events) reports `ENOTSUP`,
 `ENOENT` or `EAFNOSUPPORT`, so managed code sees an honest failure. Without the `files`
 group no path exists, and without the `sockets` group no address family does.
 `native/system_native_abi.h` pins the enumerations and structure layouts of the audited

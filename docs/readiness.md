@@ -31,6 +31,7 @@ The following gates describe what the executable suites actually establish.
 | Faults without signals | `faults` group: real CPU faults reported, edited and resumed through a host table (ARM64; x86-64 under emulation), and through the bare-metal exception vector; null references caught as `NullReferenceException` on a port with no signal substrate |
 | System facts, notifications, processes, terminal | `system`, `notifications`, `processes` and `terminal` groups and the eleven optional file operations: Linux and host-table providers checked against the kernel, the `std` providers through the C table on Linux and macOS; `Environment`, `Process`, `PosixSignalRegistration`, links, modes, times and file locks executed from C# on Linux ARM64 |
 | Local sockets, accounts, priorities | `local_sockets`, `accounts` and `priority` groups: Linux and host-table providers checked against the kernel, the `std` providers through the C table on Linux and macOS; Unix domain sockets, named pipes with `CurrentUserOnly`, account lookups and `Process.PriorityClass` executed from C# on Linux ARM64 |
+| Packet information, raw ICMP, another identity | `packets` and `spawn_as` groups, the raw socket kind and the `DONT_FRAGMENT` and `RECEIVE_ERRORS` options: Linux and host-table providers checked against the kernel, the `std` providers through the C table; `Socket.ReceiveMessageFrom`, `Ping` and `Process.Start` with a user name executed from C# on Linux ARM64 as root |
 | Interactive console | `System.Console` executed on a pseudo-terminal on Linux ARM64: window size and resize, key reads, `KeyAvailable`, Ctrl+C as input and as `CancelKeyPress`, line editing, and the terminal restored at exit |
 | Watching, mappings, volumes, network | `watches`, `mappings`, `volumes` and `network` groups and seven more socket options: Linux and host-table providers checked against the kernel, the `std` providers through the C table on Linux and macOS; `FileSystemWatcher`, `MemoryMappedFile`, `DriveInfo`, `NetworkInterface`, reverse lookup and IPv4 multicast executed from C# on Linux ARM64 |
 | Bare-metal execution | The console, I/O, system and facilities probes executed on `aarch64-unknown-none` under QEMU virt with no OS and no libc, through the bare-metal port, the freestanding C runtime and the source-built runtime |
@@ -44,20 +45,23 @@ A completed table row is not a claim that every method in its subsystem uses Rus
 
 1. **The rest of the BCL native layer.** Sessions and resource limits are not carried by
    the boundary, and no caller of them was found in the BCL libraries that were read.
-   Neither are raw sockets, control messages and packet information, the abstract
-   socket names of Linux, network change events, and a child started as another user.
-   The corresponding `SystemNative_*` entry points report `ENOTSUP`, `ENOENT` or
-   `EAFNOSUPPORT`, and a program that needs them fails honestly. Gateways, routes and
-   network statistics are not groups of the boundary either: the Linux BCL reads them
-   from `/proc` and `/sys` through the `files` group, which the facilities probe
-   exercises, and a target without those files has none. The cryptography, TLS,
-   globalization and compression native libraries of the BCL are outside the boundary.
-   The layer is verified with the five probes, not with the BCL's own test suites. The
-   sockets path has carried loopback traffic, Unix domain sockets and multicast inside one
-   container only. `System.Console` has run on a pseudo-terminal, not under a person's
-   hands. The Windows branches of the desktop `std` port compile and have not run; there
-   it has no file mappings, volumes, network information, local sockets or accounts, and
-   its change watching compares directory snapshots, as it does on macOS.
+   Neither are raw sockets of protocols other than ICMP, control messages other than
+   packet information, the abstract socket names of Linux, and network change events
+   (the BCL wraps a netlink descriptor in a `Socket` for those). The corresponding
+   `SystemNative_*` entry points report `ENOTSUP`, `ENOENT` or `EAFNOSUPPORT`, and a
+   program that needs them fails honestly. Gateways, routes and network statistics are
+   not groups of the boundary either: the Linux BCL reads them from `/proc` and `/sys`
+   through the `files` group, which the facilities probe exercises, and a target without
+   those files has none. The cryptography, TLS, globalization and compression native
+   libraries of the BCL are outside the boundary. The layer is verified with the five
+   probes, not with the BCL's own test suites. The sockets path has carried loopback
+   traffic, Unix domain sockets, ICMP echo to the loopback address and multicast inside
+   one container only. `System.Console` has run on a pseudo-terminal, not under a
+   person's hands. The Windows branches of the desktop `std` port compile and have not
+   run; there it has no file mappings, volumes, network information, local sockets,
+   accounts, packet information or children under another identity, and its change
+   watching compares directory snapshots, as it does on macOS. Raw sockets and children
+   under another identity need root, so on macOS only their refusal has run.
 2. **Faults and suspension without a signal substrate.** The runtime uses the
    `faults` group on ARM64 only; the x86-64 frame is defined and exercised at the C
    level (under emulation, see [qualification](qualification.md)), but the runtime does

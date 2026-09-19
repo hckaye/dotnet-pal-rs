@@ -138,7 +138,16 @@ child that has given its privileges up. `tests/accounts.c` compares every accoun
 `getgrouplist`, the first in a child that has set its groups. `tests/priority.c`
 compares with `getpriority` and `/proc/<pid>/stat` for this process and for a child with
 several threads; lowering a nice value again needs `CAP_SYS_NICE`, which a default
-Docker container does not grant, and the test then asserts the refusal. `scripts/facilities-probe.sh` runs `samples/FacilitiesProbe` the way
+Docker container does not grant, and the test then asserts the refusal.
+`tests/packets.c` compares the destination and the arrival interface of datagrams with
+its own `recvmsg`, builds an ICMP echo request itself and receives the reply through a
+raw socket, and shows `DONT_FRAGMENT` by the DF bit of what goes out. `tests/sockets.c`
+shows `RECEIVE_ERRORS` with an unconnected UDP socket that sends to a closed port: the
+refusal is dropped without the option and is the status of the next receive with it.
+`tests/spawn_as.c` starts children as another user and compares `id` and
+`/proc/<pid>/status` with what was asked, checks that the working directory is entered
+as the new user, that several threads can start such children at once without any thread
+of the parent changing its own ids, and runs a second time without privileges. `scripts/facilities-probe.sh` runs `samples/FacilitiesProbe` the way
 `io-probe.sh` runs the I/O probe, and `scripts/terminal-probe.sh` runs
 `samples/TerminalProbe` on a pseudo-terminal whose keyboard it plays.
 
