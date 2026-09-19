@@ -10,7 +10,7 @@ esac
 [[ "$(dotnet --version)" == 10.0.401 ]] || { echo "Use the pinned SDK 10.0.401" >&2; exit 1; }
 mkdir -p artifacts
 clang++ -std=c++17 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
-  -Iinclude -Icrates/dotnet-pal-build/native -c crates/dotnet-pal-build/crates/dotnet-pal-build/integration/dotnet10/gc_wrap.cpp -o artifacts/gc_wrap.o
+  -Iinclude -Icrates/dotnet-pal-build/native -c crates/dotnet-pal-build/integration/dotnet10/gc_wrap.cpp -o artifacts/gc_wrap.o
 python3 integration/dotnet10/symbols.py --props artifacts/wrap.props
 project=samples/GcProbe/GcProbe.csproj
 dotnet restore "$project" -r "$rid"

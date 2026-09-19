@@ -46,7 +46,7 @@ manifest = {"runtime_revision": revision, "adapter": "dotnet-pal-gc-vm-v2",
 Path("artifacts/source-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 PYMANIFEST
 clang++ -std=c++17 -O2 -fPIC -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
-  -DDOTNET_PAL_OBSERVER_ONLY -Iinclude -Icrates/dotnet-pal-build/native -c crates/dotnet-pal-build/crates/dotnet-pal-build/integration/dotnet10/gc_wrap.cpp -o artifacts/gc_observer.o
+  -DDOTNET_PAL_OBSERVER_ONLY -Iinclude -Icrates/dotnet-pal-build/native -c crates/dotnet-pal-build/integration/dotnet10/gc_wrap.cpp -o artifacts/gc_observer.o
 cargo rustc -p dotnet-pal-standalone --lib --crate-type staticlib --release --no-default-features --features host-context,host-support,host-topology,host-process,host-image,host-streams --target-dir target/host-kernel
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/services_host.c -o artifacts/services_host.o
 clang -std=c11 -O2 -fPIC -Wall -Wextra -Werror -Iinclude -c tests/kernel_host.c -o artifacts/kernel_host.o
