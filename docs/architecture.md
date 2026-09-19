@@ -107,11 +107,19 @@ See [wasm](wasm.md) and [porting](porting.md).
 ## Residual dependencies and completion
 
 Dependency inventories separate archive references from final dynamic imports and
-retain unknown symbols for review. Direct signal/context, module/loader,
-process/topology/environment, diagnostics and native allocation dependencies still
-exist outside the implemented groups; BCL shims also retain OS dependencies.
-The explicit isolation gate fails in that state. Passing functional qualification
-means the selected configurations worked, not that all OS access is centralized.
+retain unknown symbols for review. The rebuilt runtime and minipal archives pass the
+explicit isolation gate: every external reference is the boundary entry point or a
+contract in `integration/dotnet10/reviewed_references.json` (compiler output, C++
+ABI, compiler builtins, the freestanding C runtime, libm, event tracing, two
+assembler artifacts). The gate is a link-reference statement about those archives;
+the Linux executable still links glibc for the C runtime contract, and the Rust
+Linux backend makes the OS calls. The BCL native layer on the boundary covers the
+console and the terminal, files and directories with links, modes, times and locks,
+TCP/UDP sockets with multicast, the environment and system facts, signal
+registrations, child processes, change watching, file mappings, volumes and network
+interfaces; other users, sessions, priorities, Unix domain sockets and network
+statistics are not carried. See [platform](platform.md), [io](io.md),
+[system](system.md) and [facilities](facilities.md).
 
 Code generation, target calling conventions, relocation/metadata formats, startup
 and EH/stack-map support are not magically supplied by Rust target support. They

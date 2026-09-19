@@ -7,7 +7,9 @@
 //! * [`port`]: the traits a platform implements, one per capability, plus
 //!   [`define_pal!`] which exports `dotnet_pal_get_api` for a port.
 //! * The front ends in this file and the group modules ([`services`], [`kernel`],
-//!   [`runtime`], [`support`], [`context`], [`wasi`]): argument validation,
+//!   [`runtime`], [`support`], [`context`], [`wasi`], [`topology`], [`process`],
+//!   [`image`], [`streams`], [`files`], [`sockets`], [`faults`], [`system`],
+//!   [`notifications`], [`processes`], [`terminal`]): argument validation,
 //!   output sanitizing and diagnostic counters around any provider.
 //! * Reusable providers that depend on no OS: the bounded [`storage::Arena`],
 //!   the demand [`storage::Ledger`], the Wasm [`storage::Grow`] provider, and the
@@ -41,9 +43,47 @@ pub mod runtime;
 pub mod wasi;
 pub mod context;
 pub mod support;
+pub mod topology;
+pub mod process;
+pub mod image;
+pub mod streams;
+pub mod io;
+pub mod files;
+pub mod sockets;
+pub mod faults;
+pub mod system;
+pub mod notifications;
+pub mod processes;
+pub mod terminal;
+pub mod watches;
+pub mod mappings;
+pub mod volumes;
+pub mod network;
 pub mod storage;
 #[cfg(feature = "linux")]
 pub mod linux;
+#[cfg(feature = "linux")]
+mod linux_platform;
+#[cfg(feature = "linux")]
+mod linux_files;
+#[cfg(feature = "linux")]
+mod linux_sockets;
+#[cfg(feature = "linux")]
+mod linux_processes;
+#[cfg(feature = "linux")]
+mod linux_terminal;
+#[cfg(feature = "linux")]
+mod linux_notifications;
+#[cfg(feature = "linux")]
+mod linux_system;
+#[cfg(feature = "linux")]
+mod linux_watches;
+#[cfg(feature = "linux")]
+mod linux_mappings;
+#[cfg(feature = "linux")]
+mod linux_volumes;
+#[cfg(feature = "linux")]
+mod linux_network;
 #[cfg(feature = "host")]
 pub mod host;
 #[cfg(any(feature = "wasi-clock", feature = "wasi-runtime", feature = "wasi-dispatch"))]
@@ -116,6 +156,23 @@ pub struct Api {
     pub wasi: wasi::Ops,
     pub context: context::Ops,
     pub support: support::Ops,
+    // Appended after the support group: earlier prefix offsets are unchanged.
+    pub topology: topology::Ops,
+    pub process: process::Ops,
+    pub image: image::Ops,
+    pub streams: streams::Ops,
+    // Appended after the streams group.
+    pub files: files::Ops,
+    pub sockets: sockets::Ops,
+    pub faults: faults::Ops,
+    pub system: system::Ops,
+    pub notifications: notifications::Ops,
+    pub processes: processes::Ops,
+    pub terminal: terminal::Ops,
+    pub watches: watches::Ops,
+    pub mappings: mappings::Ops,
+    pub volumes: volumes::Ops,
+    pub network: network::Ops,
 }
 static RESERVE: Counter = Counter::new();
 static COMMIT: Counter = Counter::new();
@@ -277,7 +334,25 @@ pub fn build<P: Port>() -> Option<Api> {
     let (wasi_caps, wasi_ops) = wasi::negotiate::<P>();
     let (context_caps, context_ops) = context::negotiate::<P>()?;
     let (support_caps, support_ops) = support::negotiate::<P>();
-    capabilities |= services_caps | kernel_caps | runtime_caps | wasi_caps | context_caps | support_caps;
+    let (topology_caps, topology_ops) = topology::negotiate::<P>();
+    let (process_caps, process_ops) = process::negotiate::<P>();
+    let (image_caps, image_ops) = image::negotiate::<P>();
+    let (streams_caps, streams_ops) = streams::negotiate::<P>();
+    let (files_caps, files_ops) = files::negotiate::<P>();
+    let (sockets_caps, sockets_ops) = sockets::negotiate::<P>();
+    let (faults_caps, faults_ops) = faults::negotiate::<P>()?;
+    let (system_caps, system_ops) = system::negotiate::<P>();
+    let (notifications_caps, notifications_ops) = notifications::negotiate::<P>();
+    let (processes_caps, processes_ops) = processes::negotiate::<P>();
+    let (terminal_caps, terminal_ops) = terminal::negotiate::<P>();
+    let (watches_caps, watches_ops) = watches::negotiate::<P>();
+    let (mappings_caps, mappings_ops) = mappings::negotiate::<P>();
+    let (volumes_caps, volumes_ops) = volumes::negotiate::<P>();
+    let (network_caps, network_ops) = network::negotiate::<P>();
+    capabilities |= services_caps | kernel_caps | runtime_caps | wasi_caps | context_caps | support_caps
+        | topology_caps | process_caps | image_caps | streams_caps | files_caps | sockets_caps | faults_caps
+        | system_caps | notifications_caps | processes_caps | terminal_caps
+        | watches_caps | mappings_caps | volumes_caps | network_caps;
     Some(Api {
         header: Header { abi_version: ABI_VERSION, struct_size: mem::size_of::<Api>() as u32, capabilities },
         vm: vm::ops::<P::VirtualMemory>(),
@@ -289,6 +364,21 @@ pub fn build<P: Port>() -> Option<Api> {
         wasi: wasi_ops,
         context: context_ops,
         support: support_ops,
+        topology: topology_ops,
+        process: process_ops,
+        image: image_ops,
+        streams: streams_ops,
+        files: files_ops,
+        sockets: sockets_ops,
+        faults: faults_ops,
+        system: system_ops,
+        notifications: notifications_ops,
+        processes: processes_ops,
+        terminal: terminal_ops,
+        watches: watches_ops,
+        mappings: mappings_ops,
+        volumes: volumes_ops,
+        network: network_ops,
     })
 }
 
@@ -354,7 +444,9 @@ mod tests {
     #[test]
     fn capability_bits_never_alias() {
         let bits = [CAP_VM, CAP_LINEAR, CAP_DYNAMIC_LINEAR, services::CAP_CLOCK, services::CAP_SCHEDULER,
-            kernel::ALL, runtime::ALL, wasi::CAP, context::CAP, support::ALL];
+            kernel::ALL, runtime::ALL, wasi::CAP, context::CAP, support::ALL, topology::CAP, process::CAP, image::CAP, streams::CAP,
+            files::CAP, sockets::CAP, faults::CAP, system::CAP, notifications::CAP, processes::CAP, terminal::CAP,
+            watches::CAP, mappings::CAP, volumes::CAP, network::CAP];
         for (i, a) in bits.iter().enumerate() {
             assert_ne!(*a, 0);
             for b in &bits[i + 1..] { assert_eq!(a & b, 0, "capability groups overlap"); }
@@ -371,6 +463,10 @@ mod tests {
         assert_eq!(api.header.capabilities, 0);
         assert!(api.vm.reserve.is_none() && api.linear.allocate.is_none() && api.services.monotonic_ns.is_none());
         assert!(api.kernel.event_create.is_none() && api.runtime.random_bytes.is_none() && api.support.write_stderr.is_none());
+        assert!(api.topology.cpu_count.is_none() && api.process.exit.is_none() && api.image.unwind_info.is_none() && api.streams.write.is_none());
+        assert!(api.files.open.is_none() && api.sockets.create.is_none() && api.faults.install.is_none() && api.faults.read_stats.is_some());
+        assert!(api.system.text.is_none() && api.notifications.install.is_none() && api.processes.spawn.is_none() && api.terminal.window_size.is_none());
+        assert!(api.watches.open.is_none() && api.mappings.map.is_none() && api.volumes.entry.is_none() && api.network.interface_entry.is_none());
         assert!(core::ptr::eq(api, negotiate::<Empty>(&EMPTY_SLOT, ABI_VERSION)));
     }
     struct Rejecting;
@@ -382,7 +478,11 @@ mod tests {
         type StackBounds = port::Absent; type ProcessBarrier = port::Absent; type Environment = port::Absent; type Identity = port::Absent;
         type Realtime = port::Absent; type Entropy = port::Absent; type NativeMapping = port::Absent; type Modules = port::Absent;
         type NativeHeap = port::Absent; type RwLocks = port::Absent; type ThreadName = port::Absent; type Diagnostics = port::Absent;
-        type Context = port::Absent; type Wasi = port::Absent; type Abort = port::Trap;
+        type Context = port::Absent; type Wasi = port::Absent; type Topology = port::Absent; type Process = port::Absent;
+        type Image = port::Absent; type Streams = port::Absent; type Files = port::Absent; type Sockets = port::Absent;
+        type Faults = port::Absent; type SystemInfo = port::Absent; type Notifications = port::Absent; type Processes = port::Absent;
+        type Terminal = port::Absent; type Watches = port::Absent; type Mappings = port::Absent; type Volumes = port::Absent;
+        type Network = port::Absent; type Abort = port::Trap;
         fn validate() -> bool { false }
     }
     static REJECT_SLOT: Slot = Slot::new();

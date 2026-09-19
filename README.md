@@ -11,6 +11,7 @@ clear capability bits and NULL callbacks, never as stubs that return success.
 | --- | --- |
 | `dotnet-pal-rs` (this crate) | Traits (`port`), C ABI, front ends, pure storage providers, optional built-in Linux/host/WASI providers |
 | `crates/dotnet-pal-std` | A complete desktop port on the Rust standard library (Linux, macOS; Windows compiles) |
+| `crates/dotnet-pal-memfs` | An in-memory file system (`no_std` plus `alloc`) for ports without storage hardware |
 | `crates/dotnet-pal-build` | `build.rs` helper that compiles the native NativeAOT adapters and writes MSBuild link inputs |
 | `examples/browser-port` | A port whose services are JavaScript imports, and a C# program running in a browser through it |
 
@@ -19,18 +20,32 @@ describes the qualification of the built-in configurations.
 
 **Implemented and exercised:** native GC memory, clocks, scheduling, events,
 recursive locks, background/finalizer thread creation, termination TLS, stack
-bounds and process-wide memory barriers; managed stress/OOM/fault qualification
-on Linux x64 and ARM64; actual C# GC/exception execution on WASIp1, including
-a source-rebuilt LLVM native runtime without linker wrapping; the C-to-Rust
-boundary executed inside a real headless browser; and a C# program whose GC
-storage and runtime clock reach a web page through the boundary.
+bounds, process-wide memory barriers, machine topology, process services, image
+inspection, the standard streams, files and directories, TCP/UDP sockets and CPU
+fault reporting without signals; the rebuilt native runtime and `minipal`
+archives pass the strict isolation gate (no OS reference outside the boundary, no
+unreviewed reference); managed stress/OOM/fault qualification on Linux x64 and
+ARM64; the BCL native layer (System.Native) implemented on the boundary and
+executed on Linux with the BCL's file and socket APIs, synchronous and
+asynchronous; a C# program (exceptions, GC, finalizers, thread pool, monitors,
+files on an in-memory file system, null references caught as
+`NullReferenceException`) executed on bare-metal AArch64 under QEMU with no OS and
+no libc;
+actual C# GC/exception execution on WASIp1, including a source-rebuilt LLVM
+native runtime without linker wrapping; the C-to-Rust boundary executed inside a
+real headless browser; and a C# program whose GC storage and runtime clock reach
+a web page through the boundary.
 
-**Not complete:** this is not yet a fully OS-independent NativeAOT runtime or a
-production-supported port. Dependency reports still identify direct runtime OS
-references outside these groups. BCL shims, signal/context handling, module
-inspection and other target-specific services remain. See [readiness](docs/readiness.md)
-for exact completed and uncompleted work. Rust target compilation by itself does
-not establish that NativeAOT can generate or execute code for that target.
+**Not complete:** this is not a production-supported port. The BCL native layer
+does not carry processes, users, terminal control, advisory file locks, links,
+permission and timestamp changes, memory-mapped files, Unix domain sockets or
+multicast; those report honest failures rather than working. The runtime uses a
+port's fault reporting on ARM64 only, and a port with neither signals nor fault
+reporting still ends the run on a hardware fault. Targets are the CPU
+architectures ILCompiler generates code for. See
+[readiness](docs/readiness.md) for exact completed and uncompleted work. Rust
+target compilation by itself does not establish that NativeAOT can generate or
+execute code for that target.
 
 ## Using the library
 
@@ -70,9 +85,13 @@ cargo rustc --lib --crate-type staticlib --release --features linux
 | `examples/browser-port`, `heap` + `app/` | C# GC, finalizers, exceptions and BCL console/clock/entropy in headless Chromium; GC storage and clock cross the boundary | Published packs unchanged; no files, sockets or JS interop |
 | Experimental NativeAOT LLVM, WASIp1 | C# allocations, roots, GC, exceptions and clock calls; baseline, wrapped and source-rebuilt variants | Separate audited compiler family; single-threaded, eager storage |
 | `aarch64-unknown-none`, `host` / `host-services` / `host-kernel` | Freestanding Rust archive builds | Final host linkage and device execution are not tested |
+| `aarch64-unknown-none`, bare-metal port table test | The port's own boot, MMU, TLS, cooperative threads and every negotiated group executed under QEMU | QEMU virt only; no real board |
 | `riscv64gc-unknown-none-elf`, same host profiles | Freestanding archive builds | Does not supply a .NET code generator or target ABI |
 | `thumbv7em-none-eabi`, same host profiles | 32-bit archive builds without 64-bit atomics | Board support and interrupt safety are not established |
-| Linux x64 / ARM64 | Native C ABI tests and source-rebuilt Workstation/Server GC qualification | Does not eliminate every runtime/BCL OS dependency |
+| Linux x64 / ARM64 | Native C ABI tests and source-rebuilt Workstation/Server GC qualification with the strict isolation gate | The final executable still links glibc for the reviewed C runtime contract |
+| Linux x64 / ARM64, console probe | C# program with the boundary's System.Native in place of the SDK's; link map proves every `SystemNative_*` symbol came from the boundary | No processes, users or terminal control |
+| Linux ARM64, I/O probe | `File`, `Directory`, `FileStream`, `Socket`, `TcpClient`, `UdpClient`, `Dns` (synchronous and asynchronous) and null references, all through the boundary's System.Native; isolation gate over runtime, minipal and System.Native | Loopback traffic only; not the BCL's own test suites; x64 not executed |
+| `aarch64-unknown-none`, QEMU virt, managed image | The console probe and the I/O probe executed with no OS and no libc: exceptions, GC, finalizers, thread pool, monitors, files in memory, null references as managed exceptions | One cooperative core, no entropy, no network, files do not persist |
 
 CI results and logs for the **exact commit** are the evidence. Workflow definitions
 or a successful archive build are not substitutes for runtime execution.
@@ -173,16 +192,45 @@ only statistics observers, not memory/clock/kernel operations. Negative controls
 must leave Rust counters zero; positive controls must show runtime-driven calls.
 
 Given a clean checkout of `dotnet/runtime` commit
-`60629d14374c56f1cb51819049ad1fa529307f8d`:
+`4271d88e0aebf3d04f188f1334c2220d80555ef6`, the revision `integration/dotnet10/patch_runtime.py`
+requires:
 
 ```sh
 bash scripts/source-runtime.sh /path/to/runtime
 ```
 
-This rebuilds both native GC runtime archives, checks their separate SHA-256
-identities, and uses a private link overlay with matching published compiler/BCL
-artifacts. It does not modify the NuGet cache or use `--wrap` in the source variant.
-Normal CoreCLR builds retain their original implementations.
+This rebuilds both native GC runtime archives and `minipal`, checks their separate
+SHA-256 identities, and uses a private link overlay with matching published
+compiler/BCL artifacts. It does not modify the NuGet cache or use `--wrap` in the
+source variant. Normal CoreCLR builds retain their original implementations. The
+run ends with `scripts/audit_dependencies.py --require-isolated`: the rebuilt
+archives may reference only the boundary and the reviewed contracts in
+`integration/dotnet10/reviewed_references.json`.
+
+```sh
+bash scripts/platform.sh       # topology, process, image and stream groups against the kernel
+bash scripts/files.sh          # files and directories: Linux and host-table providers against the kernel
+bash scripts/sockets.sh        # TCP, UDP, poll, wake channels, options and name resolution over loopback
+bash scripts/faults.sh         # real CPU faults reported, edited and resumed through a host table
+bash scripts/system.sh         # environment enumeration, OS and user texts, CPU time, uptime
+bash scripts/notifications.sh  # real signals reported from a thread outside signal context
+bash scripts/processes.sh      # children with pipes, timed waits and termination
+bash scripts/terminal.sh       # window size, raw input and editing characters on a pseudo-terminal
+bash scripts/watches.sh        # file and directory changes against inotify
+bash scripts/mappings.sh       # shared and private file mappings against the kernel
+bash scripts/volumes.sh        # mount points and free space against statvfs
+bash scripts/network.sh        # interfaces, reverse lookup and multicast membership
+bash scripts/console-probe.sh  # the console probe with the boundary's System.Native
+bash scripts/io-probe.sh       # files, sockets and null references from C# with the boundary's System.Native
+bash scripts/system-probe.sh   # environment, child processes, signal registrations, links and locks from C#
+bash scripts/facilities-probe.sh # FileSystemWatcher, MemoryMappedFile, DriveInfo and NetworkInterface from C#
+```
+
+See [platform](docs/platform.md) for the groups, the gate, the BCL native layer and
+the freestanding C runtime, [io](docs/io.md) for files, sockets and fault reporting,
+[system](docs/system.md) for system facts, notifications, child processes and the
+terminal, and [facilities](docs/facilities.md) for change watching, file mappings,
+volumes and network information.
 
 Both Workstation and Server GC are exercised with baseline, Rust Linux, host-kernel
 and a test-only commit-fault provider. Qualification includes concurrent allocation,
@@ -194,6 +242,29 @@ effects. The effective 128 MiB heap limit and actual GC mode are asserted.
 `PAL_STRESS_SECONDS` selects 1..3600 seconds per stress configuration (CI default
 10). A finite successful stress run is not proof against every possible race.
 Timing/RSS/binary-size reports and unresolved-symbol inventories are retained.
+
+## Bare-metal AArch64 execution
+
+`examples/baremetal-aarch64` is a port to `qemu-system-aarch64 -M virt` with no
+operating system and no libc: boot code, an identity-mapped MMU, per-thread ELF
+TLS, a cooperative single-core scheduler, the PL011 serial port, an exception
+vector that reports faults, an in-memory file system and every group the runtime
+asks for. Its own table test and the four managed probes run there:
+
+```sh
+bash examples/baremetal-aarch64/run-qemu.sh            # the port's table test
+bash examples/baremetal-aarch64/build-app.sh           # the console probe as a bootable image (needs artifacts/source-sdk)
+bash examples/baremetal-aarch64/build-app.sh IoProbe   # files and null references from C#; sockets fail as absent
+bash examples/baremetal-aarch64/build-app.sh SystemProbe      # links, modes, times and locks; processes and signals fail as absent
+bash examples/baremetal-aarch64/build-app.sh FacilitiesProbe  # the in-memory file system as a drive; watching, mapping and interfaces fail as absent
+```
+
+The image links the ILCompiler object for linux-arm64, the source-built runtime
+and minipal, the boundary's System.Native, the freestanding C runtime
+(`native/freestanding`) and the port. What that machine does not provide is listed
+in the example's README: one cooperative core, RAM without protection apart from
+the unmapped null page, no entropy, no environment, no input, no network and no
+storage that outlives the run.
 
 ## Actual managed WebAssembly integration
 

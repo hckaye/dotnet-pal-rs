@@ -25,6 +25,13 @@ The following gates describe what the executable suites actually establish.
 | Mixed-language ASan | Rust/core and C/C++ boundary code instrumented together with leak checking |
 | Dependency inventory | Actual runtime/PAL unresolved symbols plus executable imports, retaining unknowns and bypasses |
 | Servicing policy | Version/digest guards and documented mandatory re-audit/qualification on upgrades |
+| Runtime OS isolation | Topology, process, image and stream groups; the rebuilt runtime and minipal archives pass `--require-isolated` against the reviewed-contract manifest |
+| BCL native layer | `native/system_native_*.c` on the boundary; the console, I/O, system and facilities probes executed on Linux with every `SystemNative_*` symbol from the boundary, audited with the gate |
+| Files and sockets | `files` and `sockets` groups: Linux and host-table providers checked against the kernel, the `std::fs` and in-memory providers through the C table; `File`, `Directory`, `FileStream`, `Socket`, `TcpClient`, `UdpClient` and `Dns` executed from C# on Linux ARM64, synchronously and asynchronously |
+| Faults without signals | `faults` group: real CPU faults reported, edited and resumed through a host table (ARM64; x86-64 under emulation), and through the bare-metal exception vector; null references caught as `NullReferenceException` on a port with no signal substrate |
+| System facts, notifications, processes, terminal | `system`, `notifications`, `processes` and `terminal` groups and the eleven optional file operations: Linux and host-table providers checked against the kernel, the `std` providers through the C table on Linux and macOS; `Environment`, `Process`, `PosixSignalRegistration`, links, modes, times and file locks executed from C# on Linux ARM64 |
+| Watching, mappings, volumes, network | `watches`, `mappings`, `volumes` and `network` groups and seven more socket options: Linux and host-table providers checked against the kernel, the `std` providers through the C table on Linux and macOS; `FileSystemWatcher`, `MemoryMappedFile`, `DriveInfo`, `NetworkInterface`, reverse lookup and IPv4 multicast executed from C# on Linux ARM64 |
+| Bare-metal execution | The console, I/O, system and facilities probes executed on `aarch64-unknown-none` under QEMU virt with no OS and no libc, through the bare-metal port, the freestanding C runtime and the source-built runtime |
 
 The workflows `boundary-validation`, `llvm-managed-validation` and
 `boundary-sanitizers` must all succeed at the candidate revision. The source-bundle
@@ -33,21 +40,33 @@ A completed table row is not a claim that every method in its subsystem uses Rus
 
 ## What is NOT complete
 
-1. **Whole-runtime OS isolation.** Current native archive inventories still expose
-   direct OS references outside the boundary. These include signal/context and
-   activation handling, module inspection/loading, environment and CPU/memory
-   topology, crash-dump/diagnostic I/O and native allocation. The strict
-   `audit_dependencies.py --require-isolated` gate is expected to reject this
-   state. A successful reporting run must not be described as an isolation pass.
-2. **All BCL native dependencies.** File, network, cryptography, process and other
-   native shims have not all been rerouted to a platform-independent callback
-   surface. Existing Linux or WASI services remain dependencies of the tested
-   configurations. This is not a replacement for a complete target runtime pack.
-3. **Arbitrary targets and execution models.** Freestanding ARM64/RISC-V/Cortex-M
-   tests build the boundary only. Device linkage/startup, target code generation,
-   exception/unwind metadata, register-context/stack-map adaptation, hardware fault
-   behavior and packaging remain target-port obligations. Existing NativeAOT
-   implementations are reused on the validated targets, not replaced by Rust.
+1. **The rest of the BCL native layer.** Other users and groups, sessions, priorities
+   and resource limits are not carried by the boundary. Neither are Unix domain and raw
+   sockets, control messages and packet information, an IPv4 group on a dual-mode IPv6
+   socket, route tables, gateways and network statistics, network change events, named
+   shared memory, and a child started as another user. The corresponding
+   `SystemNative_*` entry points report `ENOTSUP`, `ENOENT` or `EAFNOSUPPORT`, and a
+   program that needs them fails honestly. The cryptography, TLS, globalization and
+   compression native libraries of the BCL are outside the boundary. The layer is
+   verified with the four probes, not with the BCL's own test suites. The sockets path
+   has carried loopback traffic and multicast inside one container only. The terminal
+   group has run against a pseudo-terminal, not against `System.Console` on an
+   interactive terminal. The Windows branches of the desktop `std` port compile and have
+   not run; there it has no file mappings, volumes or network information, and its
+   change watching compares directory snapshots, as it does on macOS.
+2. **Faults and suspension without a signal substrate.** The runtime uses the
+   `faults` group on ARM64 only; the x86-64 frame is defined and exercised at the C
+   level, but the runtime does not read it, so an x86-64 port without `Context` still
+   ends the run on a hardware fault, as does any port with neither capability. A
+   stack overflow is not recoverable anywhere. Activation injection is absent
+   without `Context`, so suspension relies on preemptive-mode transitions, which a
+   cooperative single-core port satisfies and a preemptive multi-core port without
+   signals would not.
+3. **Arbitrary targets and execution models.** Targets are the CPU architectures
+   ILCompiler generates code for. The bare-metal example runs on QEMU's virt
+   machine only: no real board, no interrupts, no protection, one core. RISC-V and
+   Cortex-M builds compile the boundary only. Existing NativeAOT implementations
+   are reused on the validated targets, not replaced by Rust.
 4. **Additional Wasm profiles.** The managed tests are single-threaded: WASIp1
    under Node with the published or source-rebuilt runtime, and the browser
    example with the published runtime only. Shared-memory threads, WASIp2
@@ -56,6 +75,7 @@ A completed table row is not a claim that every method in its subsystem uses Rus
    qualified. Managed OOM/finalizer qualification in Wasm does not yet match the
    wider native suite. The desktop `std` port has executed its table test on
    Linux and macOS only; its Windows providers compile but have not run.
+   NUMA-aware heap placement is not exposed by the boundary on any target.
 5. **Product qualification.** A maintained upstream release must be selected and
    re-audited, the actual application's needed BCL surface must be tested, and
    longer deployment-specific stress/performance/security qualification is needed.

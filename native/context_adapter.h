@@ -7,9 +7,16 @@
 #include <signal.h>
 namespace dotnet_pal_context {
 inline std::atomic<const dotnet_pal_context_ops*> installed{nullptr};
+inline std::atomic<bool> absent{false};
+// A port without the signal substrate (no OS signals, one cooperative core) runs
+// with no hardware exception handlers and no activation injection: suspension
+// relies on the trap flag and the preemptive-mode transitions every blocking
+// port call makes. Hardware faults then end the run instead of becoming managed
+// exceptions, which the port documents.
 inline bool initialize() {
     auto *a=dotnet_pal_get_api(DOTNET_PAL_ABI_VERSION);
-    if (!a || a->header.struct_size<DOTNET_PAL_CONTEXT_API_SIZE || !(a->header.capabilities&DOTNET_PAL_CAP_NATIVE_CONTEXT)) return false;
+    if (!a || a->header.abi_version!=DOTNET_PAL_ABI_VERSION) return false;
+    if (a->header.struct_size<DOTNET_PAL_CONTEXT_API_SIZE || !(a->header.capabilities&DOTNET_PAL_CAP_NATIVE_CONTEXT)) { absent.store(true,std::memory_order_release); return true; }
     const auto *c=&a->context;
     if (!c->abi_tag || !c->action_size || !c->action_alignment || !c->install || !c->restore ||
         !c->request_activation || !c->unblock_activation || !c->current_thread || !c->process_id_async ||
@@ -24,6 +31,7 @@ inline bool initialize() {
     if (c->abi_tag()!=tag || c->action_size()!=sizeof(struct sigaction) || c->action_alignment()!=alignof(struct sigaction)) return false;
     installed.store(c,std::memory_order_release);return true;
 }
+inline bool available() { return installed.load(std::memory_order_acquire)!=nullptr; }
 inline const dotnet_pal_context_ops* require() {
     auto *c=installed.load(std::memory_order_acquire);
     if (!c) std::abort();
@@ -41,6 +49,7 @@ inline uint32_t kind(int code) {
     return UINT32_MAX;
 }
 inline bool add(int code,Handler handler,struct sigaction *previous) {
+    if(!available())return false;
     const uint32_t k=kind(code);
     if(k==UINT32_MAX || !handler || handlers[k])return false;
     handlers[k]=handler;
@@ -48,11 +57,19 @@ inline bool add(int code,Handler handler,struct sigaction *previous) {
     return true;
 }
 inline void restore(int code,struct sigaction *previous) {
+    if(!available())return;
     const uint32_t k=kind(code);
     if(k==UINT32_MAX || require()->restore(k,previous,sizeof *previous)!=DOTNET_PAL_OK)std::abort();
 }
 inline uintptr_t thread_token() {
     uintptr_t token=0;
+    if(!available()){
+        // Without a substrate the token only has to identify the thread: use the runtime identity.
+        auto *a=dotnet_pal_get_api(DOTNET_PAL_ABI_VERSION);
+        uint64_t id=0;
+        if(!a || a->header.struct_size<DOTNET_PAL_RUNTIME_API_SIZE || !a->runtime.thread_id || a->runtime.thread_id(&id)!=DOTNET_PAL_OK || id==0)std::abort();
+        return static_cast<uintptr_t>(id);
+    }
     if(require()->current_thread(&token)!=DOTNET_PAL_OK || token==0)std::abort();
     return token;
 }
@@ -62,6 +79,7 @@ inline uint64_t process_id_async() {
     return id;
 }
 inline int request(uintptr_t token) {
+    if(!available())return EAGAIN; // no injection: the target reaches a safe point by itself
     switch(require()->request_activation(token)){
         case DOTNET_PAL_OK:return 0;
         case DOTNET_PAL_BUSY:return EAGAIN;
@@ -69,7 +87,7 @@ inline int request(uintptr_t token) {
         default:return EIO;
     }
 }
-inline void unblock(){if(require()->unblock_activation()!=DOTNET_PAL_OK)std::abort();}
-inline void configure(){if(require()->ignore_broken_pipe()!=DOTNET_PAL_OK)std::abort();}
+inline void unblock(){if(available() && require()->unblock_activation()!=DOTNET_PAL_OK)std::abort();}
+inline void configure(){if(available() && require()->ignore_broken_pipe()!=DOTNET_PAL_OK)std::abort();}
 }
 #endif

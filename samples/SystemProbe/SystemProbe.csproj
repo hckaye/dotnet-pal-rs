@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The rest of the BCL's native layer through the boundary: the environment as an
+       enumeration, the user, OS texts and process facts (system group), child processes with
+       redirected streams (processes), POSIX signal registrations and Console.CancelKeyPress
+       (notifications), permissions, timestamps, links, the working directory and file locks
+       (the optional operations of the files group) and native library loading (modules).
+       ProbeExpect names what the port under test provides; the probe asserts the honest
+       failure of what it does not. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RuntimeFrameworkVersion>10.0.12</RuntimeFrameworkVersion>
+    <PublishAot>true</PublishAot>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <StripSymbols>false</StripSymbols>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <InvariantTimezone>true</InvariantTimezone>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <IlcOptimizationPreference>Size</IlcOptimizationPreference>
+    <ProbeExpect Condition="'$(ProbeExpect)' == ''">system;processes;notifications;links;modules</ProbeExpect>
+    <DefineConstants Condition="$(ProbeExpect.Contains('system'))">$(DefineConstants);EXPECT_SYSTEM</DefineConstants>
+    <DefineConstants Condition="$(ProbeExpect.Contains('processes'))">$(DefineConstants);EXPECT_PROCESSES</DefineConstants>
+    <DefineConstants Condition="$(ProbeExpect.Contains('notifications'))">$(DefineConstants);EXPECT_NOTIFICATIONS</DefineConstants>
+    <DefineConstants Condition="$(ProbeExpect.Contains('links'))">$(DefineConstants);EXPECT_LINKS</DefineConstants>
+    <DefineConstants Condition="$(ProbeExpect.Contains('modules'))">$(DefineConstants);EXPECT_MODULES</DefineConstants>
+    <DefineConstants Condition="$(ProbeExpect.Contains('baremetal'))">$(DefineConstants);EXPECT_BAREMETAL</DefineConstants>
+    <PalRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))</PalRoot>
+    <PalLib Condition="'$(PalLib)' == ''">$(PalRoot)/target/release/libdotnet_pal_rs.a</PalLib>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <LinkerArg Include="-Wl,--undefined=dotnet_pal_get_api" />
+    <NativeLibrary Include="$(PalLib)" />
+    <LinkerArg Include="-Wl,-Map=$(PalLinkMap)" Condition="'$(PalLinkMap)' != ''" />
+  </ItemGroup>
+  <!-- A small, single-core machine: see samples/ConsoleProbe. -->
+  <ItemGroup Condition="'$(PalSmallMachine)' == 'true'">
+    <RuntimeHostConfigurationOption Include="System.GC.RegionRange" Value="268435456" />
+    <RuntimeHostConfigurationOption Include="System.GC.HeapHardLimit" Value="134217728" />
+    <RuntimeHostConfigurationOption Include="System.GC.Concurrent" Value="false" />
+    <RuntimeHostConfigurationOption Include="System.GC.Server" Value="false" />
+  </ItemGroup>
+</Project>

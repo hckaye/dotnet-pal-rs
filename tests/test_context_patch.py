@@ -16,9 +16,20 @@ class ContextPatchTests(unittest.TestCase):
         out=context_patch.thread('    m_hOSThread = pthread_self();')
         self.assertIn('static_cast<pthread_t>',out)
         self.assertIn('pthread_self()',out)
+    def test_hardware_faults_fall_back_to_port_reporting(self):
+        source=('static PHARDWARE_EXCEPTION_HANDLER g_hardwareExceptionHandler = NULL;\n#define EXCEPTION_CONTINUE_EXECUTION (-1)\n'
+                '// Initialize hardware exception handling\nbool InitializeHardwareExceptionHandling()\n{\n    return install();\n}\n')
+        out=context_patch.hardware(source)
+        # The adapter must follow the state it reads and precede the function that calls it.
+        self.assertLess(out.index('g_hardwareExceptionHandler = NULL'),out.index('#include "faults_adapter.inl"'))
+        self.assertLess(out.index('#include "faults_adapter.inl"'),out.index('bool InitializeHardwareExceptionHandling()'))
+        self.assertIn('if (!dotnet_pal_context::available()) return dotnet_pal_faults::initialize();',out)
+        self.assertIn('    return install();',out)
+        with self.assertRaises(ValueError):context_patch.hardware('bool InitializeHardwareExceptionHandling()\n{\n}\n')
 
     def test_ci_sparse_source_includes_all_patch_inputs(self):
-        import patch_runtime,kernel_patch
+        import patch_runtime,kernel_patch,support_patch,topology_patch,image_patch,minipal_patch
         workflow=(Path(__file__).resolve().parents[1]/'.github/workflows/ci.yml').read_text()
-        for name in [patch_runtime.GC_FILE,patch_runtime.CMAKE_FILE,*kernel_patch.FILES,*context_patch.FILES]:
+        for name in [patch_runtime.GC_FILE,patch_runtime.CMAKE_FILE,*kernel_patch.FILES,*context_patch.FILES,*support_patch.FILES,
+                     *topology_patch.FILES,*image_patch.FILES,*minipal_patch.FILES]:
             self.assertIn('/'+name,workflow,'CI sparse checkout would omit '+name)

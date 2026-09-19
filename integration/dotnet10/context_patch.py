@@ -5,10 +5,11 @@ this patch does not pretend Rust's target list supplies codegen/unwind metadata.
 """
 from kernel_patch import once
 from runtime_patch import function as runtime_function
+HARDWARE='src/coreclr/nativeaot/Runtime/unix/HardwareExceptions.cpp'
 SIGNALS='src/coreclr/nativeaot/Runtime/unix/UnixSignals.cpp'
 HEADER='src/coreclr/nativeaot/Runtime/unix/UnixSignals.h'
 THREAD='src/coreclr/nativeaot/Runtime/thread.cpp'
-FILES=(SIGNALS,HEADER,THREAD)
+FILES=(SIGNALS,HEADER,THREAD,HARDWARE)
 def guarded(original,replacement):
     return '#ifdef DOTNET_PAL_NATIVE_CONTEXT\n'+replacement+'\n#else\n'+original+'\n#endif'
 def function(text,name,body):
@@ -28,8 +29,21 @@ def thread(text):
     old='    m_hOSThread = pthread_self();'
     text=once(text,old,guarded(old,'    m_hOSThread = static_cast<pthread_t>(dotnet_pal_context::thread_token());'))
     return '#ifdef DOTNET_PAL_NATIVE_CONTEXT\n#include "context_adapter.h"\n#endif\n'+text
+def hardware(text):
+    # The faults adapter reads g_hardwareExceptionHandler and the EXCEPTION_* codes, so it goes after both.
+    old='// Initialize hardware exception handling\nbool InitializeHardwareExceptionHandling()\n{'
+    if 'static PHARDWARE_EXCEPTION_HANDLER g_hardwareExceptionHandler' not in text or '#define EXCEPTION_CONTINUE_EXECUTION' not in text:
+        raise ValueError('hardware exception dispatch state missing')
+    new='#ifdef DOTNET_PAL_NATIVE_CONTEXT\n#include "faults_adapter.inl"\n#endif\n'+old+('\n#ifdef DOTNET_PAL_NATIVE_CONTEXT\n'
+        '    // No signal substrate: a port that reports faults itself still gets them translated; otherwise they end the run.\n'
+        '    if (!dotnet_pal_context::available()) return dotnet_pal_faults::initialize();\n#endif')
+    return '#ifdef DOTNET_PAL_NATIVE_CONTEXT\n#include "context_adapter.h"\n#endif\n'+once(text,old,new)
 def pal(text):
     text=once(text,'bool PalInit()\n{','bool PalInit()\n{\n#ifdef DOTNET_PAL_NATIVE_CONTEXT\n    if (!dotnet_pal_context::initialize()) return false;\n#endif')
+    old='bool InitializeSignalHandling()\n{'
+    text=once(text,old,old+'\n#ifdef DOTNET_PAL_NATIVE_CONTEXT\n    if (!dotnet_pal_context::available()) return true; // no activation injection without a substrate\n#endif')
+    old='void PalHijack(Thread* pThreadToHijack)\n{'
+    text=once(text,old,old+'\n#ifdef DOTNET_PAL_NATIVE_CONTEXT\n    if (!dotnet_pal_context::available()) return; // the target reaches a safe point on its own\n#endif')
     text=function(text,'UnmaskActivationSignal','    dotnet_pal_context::unblock();')
     text=function(text,'ConfigureSignals','    dotnet_pal_context::configure();')
     old='    int status = pthread_kill(pThreadToHijack->GetOSThreadHandle(), INJECT_ACTIVATION_SIGNAL);'
@@ -40,4 +54,4 @@ def pal(text):
     for required in ['GetCurrentThreadIfAvailableAsyncSafe','doInlineSuspend','g_previousActivationHandler.sa_sigaction(code, siginfo, context)']:
         if required not in text:raise ValueError('serviced activation semantics missing: '+required)
     return '#ifdef DOTNET_PAL_NATIVE_CONTEXT\n#include "context_adapter.h"\n#endif\n'+text
-TRANSFORMS={SIGNALS:signals,HEADER:header,THREAD:thread}
+TRANSFORMS={SIGNALS:signals,HEADER:header,THREAD:thread,HARDWARE:hardware}

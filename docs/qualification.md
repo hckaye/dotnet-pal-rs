@@ -62,6 +62,77 @@ The tool does not hide those references in a success summary. Its explicit
 alone does not establish execution reachability; this inventory is not a syscall
 trace or a complete proof of OS isolation.
 
+## Isolation gate, console probe and bare metal
+
+`scripts/source-runtime.sh` ends with `audit_dependencies.py --require-isolated`
+over the rebuilt runtime and minipal archives. `scripts/console-probe.sh` publishes
+`samples/ConsoleProbe` with those archives and `native/system_native_*.c` in place
+of the SDK's System.Native, checks the link map, runs the program and audits all three
+archives. `scripts/io-probe.sh` does the same with `samples/IoProbe`, which uses the
+BCL's file and socket APIs and dereferences null, and additionally requires the file
+and socket entry points to be in the image. `scripts/system-probe.sh` and
+`scripts/facilities-probe.sh` do it with `samples/SystemProbe` and
+`samples/FacilitiesProbe`. `examples/baremetal-aarch64/build-app.sh`
+links one of the four managed objects into a bootable image and runs it under
+`qemu-system-aarch64`; the run passes when the probe prints its `PASS` line and the
+machine exits with status 0 through semihosting. The evidence is the QEMU serial log
+and the link map.
+
+## Files, sockets and faults
+
+`scripts/files.sh` and `scripts/sockets.sh` run `tests/files.c` and `tests/sockets.c`
+against the Linux providers and against independent C providers behind host tables.
+Every answer is compared with the kernel's own (the same operation through the C
+library, `/proc/self/fd`, loopback traffic), every status of the groups that the
+environment can provoke is provoked, and a provider that breaks its contract shows
+what the front ends sanitize. `scripts/faults.sh` takes real faults through
+`tests/faults_host.c`: a null store on two threads resumed at a recovery function
+with edited argument registers, an unhandled fault that kills a child by the signal,
+and a fault inside the handler. It has run on ARM64 natively and on x86-64 under
+Rosetta emulation, not on an x86-64 CPU. `cargo test -p dotnet-pal-memfs` and
+`cargo test -p dotnet-pal-std` cover the in-memory and `std::fs` providers through
+the negotiated C table.
+
+## System facts, notifications, child processes and the terminal
+
+`scripts/system.sh`, `notifications.sh`, `processes.sh` and `terminal.sh` follow the same
+plan: the Linux provider and an independent C provider behind a host table, each compared
+with what the C library and the kernel say, and a provider that breaks its contract.
+`tests/system.c` compares the environment enumeration, the texts, CPU time, uptime and
+user ids with `environ`, `/proc`, `getrusage` and `getpwuid`. `tests/notifications.c`
+sends real signals: reports arrive on a thread of the provider's own in ordinary thread
+context, a kind that is not enabled keeps the action it had, and the fatal and stopping
+default actions are observed in children. `tests/processes.c` starts real children (`sh`,
+`cat`, `sleep`, `env`) with pipes, timed waits and both kinds of termination, checks that
+a child inherits no descriptor of the parent, and runs a second time with `pidfd_open`
+refused by a seccomp filter, as on a kernel before 5.3. `tests/terminal.c` makes its own
+pseudo-terminal, puts its slave side on descriptors 0 to 2 before the table is negotiated,
+and plays the keyboard from the master side. `scripts/system-probe.sh` runs
+`samples/SystemProbe` the way `io-probe.sh` runs the I/O probe.
+
+## Change watching, file mappings, volumes and network information
+
+`scripts/watches.sh`, `mappings.sh`, `volumes.sh` and `network.sh` follow the same plan
+again. `tests/watches.c` makes real changes in a scratch directory and keeps an inotify
+instance of its own beside the boundary: both must report the same kinds, names and
+cookies in the same order, each for its own watch. It also releases a reader that waits
+without a limit by removing the watch from a second thread. `tests/mappings.c` checks
+that a shared write reaches the file and a second mapping, that a private one reaches
+neither, that the mapping outlives the handle, that the bytes after the end of the file
+read as zero, and that a handle opened the wrong way is refused. `tests/volumes.c`
+compares the mount list with `getmntent` and the figures with `statvfs`; run with the
+right to mount, it also lists a tmpfs whose mount point has a space, a tab, a backslash
+and a newline in its name. `tests/network.c` compares interfaces and addresses with
+`getifaddrs`, `if_nameindex` and `ioctl`, enumerates from two threads at once, looks up
+the loopback address and an address without a name, and sends datagrams to a group it
+joins and leaves on the container's multicast-capable interface; a datagram sent through
+the loopback interface must not reach a member on another one. `tests/sockets.c` sets
+each of the seven new socket options, reads it back and checks its effect on real
+traffic through the hop limit and the arrival interface the kernel reports. IPv6 group
+traffic runs only where the interface has IPv6 switched on, which a default Docker
+container has not. `scripts/facilities-probe.sh` runs `samples/FacilitiesProbe` the way
+`io-probe.sh` runs the I/O probe.
+
 ## Sanitizer coverage
 
 `sanitize.sh address` uses a pinned nightly solely for AddressSanitizer, rebuilding

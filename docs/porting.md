@@ -67,7 +67,22 @@ The capability keys and the traits behind them:
 | `Events`, `Mutexes`, `Threads`, `ThreadLocal`, `StackBounds`, `ProcessBarrier` | same names | Runtime synchronization, threads, TLS, stack limits, membarrier |
 | `Environment`, `Identity`, `Realtime`, `Entropy`, `NativeMapping`, `Modules` | same names | Environment, process/thread ids, wall clock, random bytes, native mappings, module loading |
 | `NativeHeap`, `RwLocks`, `ThreadName`, `Diagnostics` | same names | Helper heap, reader/writer locks, thread names, fatal output |
-| `Context` | `SignalContext` | Architecture-bound signal substrate (raw table) |
+| `Topology` | `Topology` | CPU counts and affinity, memory figures, cache size, CPU feature words |
+| `Process` | `Process` | Orderly exit, debugger presence, crash-dump utility launch |
+| `Image` | `Image` | Unwind tables of the image containing an address, readability probes, build ids |
+| `Streams` | `Streams` | The three standard streams |
+| `Files` | `Files` | Files and directories behind the BCL's file APIs |
+| `Sockets` | `Sockets` | TCP and UDP sockets, readiness polling, name resolution |
+| `Faults` | `Faults` | CPU faults reported by the port's own trap path; see below |
+| `SystemInfo` | `SystemInfo` | The environment as an enumeration, the executable's path, OS texts, the user, CPU time and uptime |
+| `Notifications` | `Notifications` | Requests from outside the process: the interrupt key, a request to terminate, a resized terminal window |
+| `Processes` | `Processes` | Child processes with pipes to their standard streams |
+| `Terminal` | `Terminal` | Window size, line and raw input, readiness of input, editing characters |
+| `Watches` | `Watches` | Changes to files and directories, queued for a reader |
+| `Mappings` | `Mappings` | Files mapped into memory; provided by the type that provides `Files` |
+| `Volumes` | `Volumes` | Mount points, capacity, free space and format of a volume |
+| `Network` | `Network` | Network interfaces, reverse lookup, multicast membership; provided by the type that provides `Sockets` |
+| `Context` | `SignalContext` | Architecture-bound signal substrate (raw table); optional, see below |
 | `Wasi` | `WasiTransport` | The single-import WASIp1 transport |
 | `Abort` | `Abort` | Termination after an internal invariant failure |
 
@@ -77,6 +92,43 @@ will re-check results (a reserve that returns an unaligned pointer, an
 environment lookup that reports more bytes than the buffer holds). What a
 provider cannot know, such as whether a handle is still alive, remains the
 caller's contract as documented in `include/dotnet_pal.h`.
+
+The source-integrated runtime requires `VirtualMemory`, `Clock`, `Scheduler`, the
+kernel group, `Identity`, `Realtime`, `NativeMapping`, the support group,
+`Topology` and `Image`. `Environment`, `Entropy`, `Modules`, `Process` and
+`Context` may be absent: variables read as unset, there is no entropy source, no
+module loads and dumps are unavailable. Without `Context` the runtime installs no
+signal handlers. A port that owns a trap path provides `Faults` instead: its
+handler builds a `faults::Frame` and calls `faults::deliver`, and the runtime
+turns a null dereference in managed code into `NullReferenceException` (on ARM64;
+elsewhere, and without either capability, a hardware fault ends the run). The
+bare-metal example is such a port. `Streams`, `Files`, `Sockets` and the eight
+groups after `Faults` are what the boundary's System.Native builds the BCL's
+console, file, network, process and environment APIs on; a program that uses none
+of them needs none of them. See [io](io.md), [system](system.md) and
+[facilities](facilities.md).
+
+## The BCL native layer and the C runtime
+
+A NativeAOT program also links System.Native, the BCL's native layer.
+Five units implement it on the boundary. `native/system_native_pal.c` has the
+native heap, threads, monitors, clocks, entropy, the environment lookup and error
+codes. `system_native_io.c` has descriptors, streams, files and directories,
+change watching, file mappings and volumes. `system_native_net.c` has sockets,
+readiness events, name resolution and network interfaces. `system_native_sys.c`
+has system facts, signal registrations, the terminal and module loading.
+`system_native_proc.c` has child processes and their pipes. What the boundary
+does not carry reports `ENOTSUP`, `ENOENT` or `EAFNOSUPPORT`. A port compiles the
+units against Linux headers, because the errno values and the runtime archive
+follow that ABI, and links them in place of the SDK's `libSystem.Native.a`. A
+port without storage hardware can name `dotnet_pal_memfs::MemFs` as its `Files`
+and `Volumes` provider.
+
+A target with no libc links `native/freestanding`, the C runtime contract the
+runtime archives and System.Native need, and defines the two hooks
+`dotnet_pal_freestanding_abort` and `dotnet_pal_freestanding_exit`. The math
+library comes from the port (the bare-metal example exports the pure-Rust `libm`).
+See [platform](platform.md).
 
 ## Storage without an OS
 

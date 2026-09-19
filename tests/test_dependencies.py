@@ -19,3 +19,29 @@ class DependencyInventoryTests(unittest.TestCase):
         self.assertEqual(audit.classify('new_platform_syscall'), 'other-needs-review')
         self.assertEqual(audit.classify('dotnet_pal_get_api'), 'boundary')
         self.assertEqual(audit.classify('mmap'), 'memory-and-native-allocator')
+    def test_manifest_reviews_non_os_contracts_only(self):
+        reviewed = audit.load_reviewed()
+        self.assertEqual(audit.reviewed_category('memcpy', ['a.a[x.o]'], reviewed), 'crt-freestanding')
+        self.assertEqual(audit.reviewed_category('_ZnwmRKSt9nothrow_t', ['a.a[x.o]'], reviewed), 'cxx-abi')
+        self.assertEqual(audit.reviewed_category('RhpNewFast', ['a.a[x.o]'], reviewed), 'managed-contract')
+        self.assertEqual(audit.reviewed_category('dst', ['a.a[WriteBarriers.S.o]'], reviewed), 'assembler-artifact')
+        self.assertIsNone(audit.reviewed_category('dst', ['a.a[other.o]'], reviewed))
+        self.assertIsNone(audit.reviewed_category('sysconf', ['a.a[x.o]'], reviewed))
+        self.assertIsNone(audit.reviewed_category('minipal_hires_ticks', ['a.a[x.o]'], reviewed))
+    def test_isolation_requires_reviewed_or_boundary_only(self):
+        runtime = {'unresolved_strong': [{'symbol': 'dotnet_pal_get_api', 'owners': ['a.a[x.o]']}, {'symbol': 'memcpy', 'owners': ['a.a[x.o]']}], 'unresolved_weak': {}}
+        self.assertTrue(audit.assess_runtime(runtime)['isolated_runtime'])
+        runtime['unresolved_strong'].append({'symbol': 'new_helper', 'owners': ['a.a[x.o]']})
+        report = audit.assess_runtime(runtime)
+        self.assertFalse(report['isolated_runtime'])
+        self.assertEqual([i['symbol'] for i in report['runtime_unreviewed_references_outside_boundary']], ['new_helper'])
+        runtime['unresolved_strong'][-1]['symbol'] = 'sysconf'
+        report = audit.assess_runtime(runtime)
+        self.assertEqual([i['symbol'] for i in report['runtime_os_references_outside_boundary']], ['sysconf'])
+    def test_merge_resolves_references_inside_the_archive_set(self):
+        first = {'path': 'a', 'sha256': '1', 'dynamic_symbols_only': False, 'defined': ['helper'], 'tool_warnings': '',
+                 'unresolved_strong': [{'symbol': 'minipal_x', 'category': 'other-needs-review', 'owners': ['a[1.o]']}], 'unresolved_weak': {}}
+        second = {'path': 'b', 'sha256': '2', 'dynamic_symbols_only': False, 'defined': ['minipal_x'], 'tool_warnings': '',
+                  'unresolved_strong': [{'symbol': 'helper', 'category': 'other-needs-review', 'owners': ['b[2.o]']}, {'symbol': 'mmap', 'category': 'memory-and-native-allocator', 'owners': ['b[2.o]']}], 'unresolved_weak': {}}
+        merged = audit.merge([first, second])
+        self.assertEqual([i['symbol'] for i in merged['unresolved_strong']], ['mmap'])

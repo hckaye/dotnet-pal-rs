@@ -9,12 +9,13 @@ namespace dotnet_pal_runtime {
 inline std::atomic<const dotnet_pal_api*> installed{nullptr};
 inline bool initialize() {
     auto *p = dotnet_pal_get_api(DOTNET_PAL_ABI_VERSION);
+    const uint64_t required = DOTNET_PAL_CAP_IDENTITY | DOTNET_PAL_CAP_REALTIME | DOTNET_PAL_CAP_NATIVE_MEMORY;
     if (!p || p->header.abi_version != DOTNET_PAL_ABI_VERSION || p->header.struct_size < DOTNET_PAL_RUNTIME_API_SIZE ||
-        (p->header.capabilities & DOTNET_PAL_CAP_RUNTIME) != DOTNET_PAL_CAP_RUNTIME) return false;
+        (p->header.capabilities & required) != required) return false;
     const auto &r = p->runtime;
-    if (!r.environment_get || !r.process_id || !r.thread_id || !r.realtime_ns || !r.random_bytes ||
-        !r.mapping_allocate || !r.mapping_release || !r.mapping_protect || !r.module_open ||
-        !r.module_symbol || !r.module_close || !r.module_info) return false;
+    // Identity, the wall clock and native mappings are required; an environment,
+    // entropy and module loading are services a port may honestly lack.
+    if (!r.process_id || !r.thread_id || !r.realtime_ns || !r.mapping_allocate || !r.mapping_release || !r.mapping_protect) return false;
     installed.store(p, std::memory_order_release);
     return true;
 }
@@ -25,6 +26,7 @@ inline const dotnet_pal_api *require() {
 }
 inline uint32_t environment(const char *name, char *buffer, uint32_t size) {
     size_t required = 0;
+    if (!require()->runtime.environment_get) return 0; // no environment: every variable is unset
     auto status = require()->runtime.environment_get(reinterpret_cast<const uint8_t*>(name), std::strlen(name),
         reinterpret_cast<uint8_t*>(buffer), size, &required);
     if (status == DOTNET_PAL_OK) return static_cast<uint32_t>(required - 1);
@@ -69,22 +71,25 @@ inline bool protect(void *address, size_t size, uint32_t access) {
 }
 inline void *open(const char *name) {
     void *result = nullptr;
+    if (!require()->runtime.module_open) return nullptr;
     const auto status = require()->runtime.module_open(reinterpret_cast<const uint8_t*>(name), name ? std::strlen(name) : 0, &result);
     return status == DOTNET_PAL_OK ? result : nullptr;
 }
 inline void *symbol(void *module, const char *name) {
     void *result = nullptr;
+    if (!require()->runtime.module_symbol) return nullptr;
     const auto status = require()->runtime.module_symbol(module, reinterpret_cast<const uint8_t*>(name), std::strlen(name), &result);
     return status == DOTNET_PAL_OK ? result : nullptr;
 }
 inline void *module_base(void *address) {
     dotnet_pal_module_info info{};
+    if (!require()->runtime.module_info) return nullptr;
     return require()->runtime.module_info(address, &info) == DOTNET_PAL_OK ? info.base : nullptr;
 }
 inline int32_t module_name(void *address, const char **name) {
     *name = nullptr;
     dotnet_pal_module_info info{};
-    if (require()->runtime.module_info(address, &info) != DOTNET_PAL_OK || info.name_length > INT32_MAX) return 0;
+    if (!require()->runtime.module_info || require()->runtime.module_info(address, &info) != DOTNET_PAL_OK || info.name_length > INT32_MAX) return 0;
     *name = reinterpret_cast<const char*>(info.name);
     return static_cast<int32_t>(info.name_length);
 }

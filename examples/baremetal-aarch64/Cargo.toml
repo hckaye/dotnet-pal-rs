@@ -1,0 +1,34 @@
+[package]
+name = "baremetal-aarch64"
+version = "0.7.0"
+edition = "2021"
+rust-version = "1.98"
+publish = false
+description = "Example port of the dotnet-pal-rs boundary to bare-metal AArch64 (QEMU virt): no OS, no libc"
+license = "MIT"
+
+# Its own workspace: the example is built standalone for aarch64-unknown-none and
+# is not part of the repository workspace.
+[workspace]
+
+[lib]
+crate-type = ["staticlib"]
+
+[features]
+# Print negotiation, reservations, thread creation and exits on the serial port.
+trace = []
+
+[dependencies]
+dotnet-pal-rs = { path = "../..", default-features = false }
+# The in-memory file system behind the `Files` capability; it needs the global allocator in src/memory.rs.
+dotnet-pal-memfs = { path = "../../crates/dotnet-pal-memfs" }
+# The C math library the runtime and generated code call, as pure Rust.
+libm = { version = "0.2", default-features = false }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = false
+codegen-units = 1

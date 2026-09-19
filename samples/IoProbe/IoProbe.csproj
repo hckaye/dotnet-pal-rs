@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Files, sockets and hardware faults through the boundary: File/Directory/FileStream,
+       Socket/TcpListener/UdpClient (synchronous and asynchronous) and null references that must
+       arrive as NullReferenceException. ProbeExpect names what the port under test provides
+       (files;sockets); the probe asserts the honest failure of what it does not. Its BCL native
+       layer is native/system_native_*.c when published through scripts/io-probe.sh or the
+       bare-metal example. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RuntimeFrameworkVersion>10.0.12</RuntimeFrameworkVersion>
+    <PublishAot>true</PublishAot>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <StripSymbols>false</StripSymbols>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <InvariantTimezone>true</InvariantTimezone>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <IlcOptimizationPreference>Size</IlcOptimizationPreference>
+    <ProbeExpect Condition="'$(ProbeExpect)' == ''">files;sockets</ProbeExpect>
+    <DefineConstants Condition="$(ProbeExpect.Contains('files'))">$(DefineConstants);EXPECT_FILES</DefineConstants>
+    <DefineConstants Condition="$(ProbeExpect.Contains('sockets'))">$(DefineConstants);EXPECT_SOCKETS</DefineConstants>
+    <PalRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))</PalRoot>
+    <PalLib Condition="'$(PalLib)' == ''">$(PalRoot)/target/release/libdotnet_pal_rs.a</PalLib>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The SDK lists the boundary archive first; naming its entry point undefined up front
+         makes the linker keep it for the runtime, minipal and System.Native references that follow. -->
+    <LinkerArg Include="-Wl,--undefined=dotnet_pal_get_api" />
+    <NativeLibrary Include="$(PalLib)" />
+    <LinkerArg Include="-Wl,-Map=$(PalLinkMap)" Condition="'$(PalLinkMap)' != ''" />
+  </ItemGroup>
+  <!-- A small, single-core machine: see samples/ConsoleProbe. -->
+  <ItemGroup Condition="'$(PalSmallMachine)' == 'true'">
+    <RuntimeHostConfigurationOption Include="System.GC.RegionRange" Value="268435456" />
+    <RuntimeHostConfigurationOption Include="System.GC.HeapHardLimit" Value="134217728" />
+    <RuntimeHostConfigurationOption Include="System.GC.Concurrent" Value="false" />
+    <RuntimeHostConfigurationOption Include="System.GC.Server" Value="false" />
+  </ItemGroup>
+</Project>

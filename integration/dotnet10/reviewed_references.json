@@ -1,0 +1,213 @@
+{
+  "_comment": "External references the rebuilt NativeAOT runtime and minipal archives may keep without crossing the boundary. Every entry is a link-time contract that is not an OS service: names the compiler output defines, the C++ ABI, compiler runtime builtins, the freestanding C runtime contract, libm, the event tracing archives, and two assembler artifacts. Anything else outside the boundary is unreviewed and fails the isolation gate.",
+  "categories": {
+    "managed-contract": {
+      "reason": "Defined by the ILCompiler output, System.Private.CoreLib or the bootstrapper of every NativeAOT executable.",
+      "patterns": [
+        "^_?Rh[A-Za-z0-9_]*$",
+        "^S_P_CoreLib_",
+        "^__managed__",
+        "^ProcessFinalizers$",
+        "^g_compilerEmbeddedKnobsBlob$",
+        "^g_compilerEmbeddedSettingsBlob$",
+        "^g_requiredCpuFeatures$",
+        "^__security_cookie$"
+      ]
+    },
+    "runtime-internal": {
+      "reason": "Defined by another member of the runtime's own archive set (GC selector, event lock, vxsort kernels).",
+      "patterns": [
+        "^_Z20InitializeGCSelectorv$",
+        "^_Z21InitializeGCEventLockv$",
+        "^_Z\\d+do_vxsort_"
+      ]
+    },
+    "event-tracing-contract": {
+      "reason": "Provided by the eventpipe archive the SDK links (enabled or disabled); it is audited with the runtime, not an OS service.",
+      "patterns": [
+        "^_Z\\d+FireEtw",
+        "^_Z\\d+EventPipe_",
+        "^_Z\\d+DiagnosticServer_",
+        "^_Z\\d+EventTracing_Initializev$",
+        "^_Z\\d+IsRuntimeProviderEnabled",
+        "^_Z\\d+EventEnabled",
+        "^_ZN3ETW"
+      ]
+    },
+    "cxx-abi": {
+      "reason": "Itanium C++ ABI entry points every C++ runtime supplies: allocation operators, static destructor registration, guards.",
+      "symbols": [
+        "_ZSt7nothrow",
+        "__cxa_atexit",
+        "__cxa_finalize",
+        "__cxa_pure_virtual",
+        "__cxa_deleted_virtual",
+        "__cxa_guard_acquire",
+        "__cxa_guard_release",
+        "__cxa_guard_abort",
+        "__dso_handle"
+      ],
+      "patterns": [
+        "^_Zn[wa]m(RKSt9nothrow_t)?$",
+        "^_Zd[la]Pv(m|RKSt9nothrow_t)?$"
+      ]
+    },
+    "compiler-builtin": {
+      "reason": "Compiler runtime builtins by exact family: outline atomics, cache maintenance, stack protector, libgcc integer and floating helpers.",
+      "symbols": [
+        "__clear_cache",
+        "__stack_chk_fail",
+        "__stack_chk_guard",
+        "__multi3"
+      ],
+      "patterns": [
+        "^__aarch64_(cas|ldadd|ldclr|ldeor|ldset|swp)(1|2|4|8|16)_(relax|acq|rel|acq_rel)$",
+        "^__(udiv|div|umod|mod|divmod|udivmod)(ti|di|si)3$",
+        "^__(mul|neg|ashl|ashr|lshr)(ti|di)3$",
+        "^__(fix|fixuns|float|floatun)(sf|df|tf)(si|di|ti)$",
+        "^__(trunc|extend)(hf|sf|df|tf)(hf|sf|df|tf)2$",
+        "^__(popcount|ctz|clz|parity|bswap)(si|di|ti)2$",
+        "^__aeabi_[a-z0-9_]+$"
+      ]
+    },
+    "crt-freestanding": {
+      "reason": "The freestanding C runtime contract (string, memory, formatting, number parsing, errno, termination and exit hooks). native/freestanding provides it without OS calls; a hosted target takes it from its libc.",
+      "symbols": [
+        "memcpy",
+        "memmove",
+        "memset",
+        "memcmp",
+        "bcmp",
+        "memchr",
+        "strlen",
+        "strnlen",
+        "strcmp",
+        "strncmp",
+        "strcpy",
+        "strncpy",
+        "strcat",
+        "strncat",
+        "strchr",
+        "strrchr",
+        "strstr",
+        "strcasecmp",
+        "strncasecmp",
+        "strspn",
+        "strcspn",
+        "strpbrk",
+        "strtok_r",
+        "strdup",
+        "strndup",
+        "strerror",
+        "strerror_r",
+        "vsnprintf",
+        "snprintf",
+        "vsprintf",
+        "sprintf",
+        "sscanf",
+        "vsscanf",
+        "strtol",
+        "strtoul",
+        "strtoll",
+        "strtoull",
+        "atoi",
+        "atol",
+        "atoll",
+        "qsort",
+        "bsearch",
+        "abort",
+        "exit",
+        "_Exit",
+        "atexit",
+        "errno"
+      ],
+      "patterns": [
+        "^__isoc23_(sscanf|vsscanf|strtol|strtoul|strtoll|strtoull)$",
+        "^__isoc99_(sscanf|vsscanf)$",
+        "^__errno_location$",
+        "^__errno$"
+      ]
+    },
+    "libm": {
+      "reason": "C math library functions the GC and generated code call; pure computation with no OS state.",
+      "symbols": [
+        "log",
+        "log2",
+        "log10",
+        "exp",
+        "exp2",
+        "pow",
+        "sqrt",
+        "cbrt",
+        "sin",
+        "cos",
+        "tan",
+        "asin",
+        "acos",
+        "atan",
+        "atan2",
+        "sinh",
+        "cosh",
+        "tanh",
+        "asinh",
+        "acosh",
+        "atanh",
+        "fmod",
+        "floor",
+        "ceil",
+        "round",
+        "trunc",
+        "fabs",
+        "fma",
+        "modf",
+        "ldexp",
+        "frexp",
+        "ilogb",
+        "scalbn",
+        "sinf",
+        "cosf",
+        "tanf",
+        "asinf",
+        "acosf",
+        "atanf",
+        "atan2f",
+        "sinhf",
+        "coshf",
+        "tanhf",
+        "asinhf",
+        "acoshf",
+        "atanhf",
+        "logf",
+        "log2f",
+        "log10f",
+        "expf",
+        "exp2f",
+        "powf",
+        "sqrtf",
+        "cbrtf",
+        "fmodf",
+        "floorf",
+        "ceilf",
+        "roundf",
+        "truncf",
+        "fabsf",
+        "fmaf",
+        "modff",
+        "ldexpf",
+        "frexpf",
+        "ilogbf",
+        "scalbnf"
+      ]
+    },
+    "assembler-artifact": {
+      "reason": "GNU as treats ';' as a statement separator on AArch64, so the comment 'x14 = dst' in the write barrier assembly becomes a symbol assignment that references dst and val; no relocation uses them and the linker drops them.",
+      "symbols": [
+        "dst",
+        "val"
+      ],
+      "owners": [
+        "WriteBarriers.S.o"
+      ]
+    }
+  }
+}

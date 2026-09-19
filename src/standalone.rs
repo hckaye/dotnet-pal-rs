@@ -89,6 +89,55 @@ impl Port for Standalone {
     #[cfg(feature = "wasi-dispatch")] type Wasi = crate::wasi_p1::Dispatch;
     #[cfg(not(feature = "wasi-dispatch"))] type Wasi = Absent;
 
+    #[cfg(feature = "linux")] type Topology = Linux;
+    #[cfg(feature = "host-topology")] type Topology = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-topology")))] type Topology = Absent;
+    #[cfg(feature = "linux")] type Process = Linux;
+    #[cfg(feature = "host-process")] type Process = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-process")))] type Process = Absent;
+    #[cfg(feature = "linux")] type Image = Linux;
+    #[cfg(feature = "host-image")] type Image = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-image")))] type Image = Absent;
+    #[cfg(feature = "linux")] type Streams = Linux;
+    #[cfg(feature = "host-streams")] type Streams = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-streams")))] type Streams = Absent;
+
+    #[cfg(feature = "linux")] type Files = Linux;
+    #[cfg(feature = "host-files")] type Files = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-files")))] type Files = Absent;
+    #[cfg(feature = "linux")] type Sockets = Linux;
+    #[cfg(feature = "host-sockets")] type Sockets = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-sockets")))] type Sockets = Absent;
+    // Linux reports faults as signals through the context group; only a host table reports them here.
+    #[cfg(feature = "host-faults")] type Faults = Host;
+    #[cfg(not(feature = "host-faults"))] type Faults = Absent;
+
+    #[cfg(feature = "linux")] type SystemInfo = Linux;
+    #[cfg(feature = "host-system")] type SystemInfo = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-system")))] type SystemInfo = Absent;
+    #[cfg(feature = "linux")] type Notifications = Linux;
+    #[cfg(feature = "host-notifications")] type Notifications = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-notifications")))] type Notifications = Absent;
+    #[cfg(feature = "linux")] type Processes = Linux;
+    #[cfg(feature = "host-processes")] type Processes = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-processes")))] type Processes = Absent;
+    #[cfg(feature = "linux")] type Terminal = Linux;
+    #[cfg(feature = "host-terminal")] type Terminal = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-terminal")))] type Terminal = Absent;
+
+    #[cfg(feature = "linux")] type Watches = Linux;
+    #[cfg(feature = "host-watches")] type Watches = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-watches")))] type Watches = Absent;
+    #[cfg(feature = "linux")] type Mappings = Linux;
+    #[cfg(feature = "host-mappings")] type Mappings = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-mappings")))] type Mappings = Absent;
+    #[cfg(feature = "linux")] type Volumes = Linux;
+    #[cfg(feature = "host-volumes")] type Volumes = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-volumes")))] type Volumes = Absent;
+    #[cfg(feature = "linux")] type Network = Linux;
+    #[cfg(feature = "host-network")] type Network = Host;
+    #[cfg(not(any(feature = "linux", feature = "host-network")))] type Network = Absent;
+
     #[cfg(feature = "linux")] type Abort = Linux;
     #[cfg(all(feature = "host", not(feature = "linux")))] type Abort = Host;
     #[cfg(not(any(feature = "linux", feature = "host")))] type Abort = crate::port::Trap;

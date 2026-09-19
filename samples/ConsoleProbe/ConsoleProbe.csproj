@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A console-class program: text output, environment, exceptions, GC, finalizers,
+       threads and timing. Its BCL native layer is native/system_native_*.c when published
+       through scripts/console-probe.sh or the bare-metal example. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RuntimeFrameworkVersion>10.0.12</RuntimeFrameworkVersion>
+    <PublishAot>true</PublishAot>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <StripSymbols>false</StripSymbols>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <InvariantTimezone>true</InvariantTimezone>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <IlcOptimizationPreference>Size</IlcOptimizationPreference>
+    <PalRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))</PalRoot>
+    <PalLib Condition="'$(PalLib)' == ''">$(PalRoot)/target/release/libdotnet_pal_rs.a</PalLib>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The SDK lists the boundary archive first; naming its entry point undefined up front
+         makes the linker keep it for the runtime, minipal and System.Native references that follow. -->
+    <LinkerArg Include="-Wl,--undefined=dotnet_pal_get_api" />
+    <NativeLibrary Include="$(PalLib)" />
+    <NativeLibrary Include="$(PalHostObject)" Condition="'$(PalHostObject)' != ''" />
+    <LinkerArg Include="-Wl,-Map=$(PalLinkMap)" Condition="'$(PalLinkMap)' != ''" />
+  </ItemGroup>
+  <!-- A small, single-core machine: a 256 MiB region range and a 128 MiB hard limit keep the
+       GC's reservations inside the RAM a bare-metal port carves them from; no background GC thread. -->
+  <ItemGroup Condition="'$(PalSmallMachine)' == 'true'">
+    <RuntimeHostConfigurationOption Include="System.GC.RegionRange" Value="268435456" />
+    <RuntimeHostConfigurationOption Include="System.GC.HeapHardLimit" Value="134217728" />
+    <RuntimeHostConfigurationOption Include="System.GC.Concurrent" Value="false" />
+    <RuntimeHostConfigurationOption Include="System.GC.Server" Value="false" />
+  </ItemGroup>
+  <!-- A port's link inputs (bare-metal example): the port archive, adapters and linker arguments. -->
+  <Import Project="$(PalProps)" Condition="'$(PalProps)' != ''" />
+</Project>

@@ -15,6 +15,21 @@
 //! | Process barrier | Linux `membarrier`, Windows `FlushProcessWriteBuffers`; absent elsewhere |
 //! | Environment, entropy, native heap, diagnostics | `std::env`, `getrandom`, `std::alloc`, `std::io::stderr` |
 //! | Modules | `dlopen`/`dlsym`/`dladdr` or `LoadLibrary`/`GetProcAddress` |
+//! | Topology (CPU counts, affinity, memory figures, cache, feature words) | procfs/sysfs/cgroup v2, sysctl/Mach, or system information APIs |
+//! | Process (exit, debugger presence) | `std::process`, procfs or sysctl; crash dumps are unsupported |
+//! | Image (unwind tables, readability, build id) | ELF program headers on Linux; absent elsewhere |
+//! | Standard streams | `std::io` stdin, stdout and stderr |
+//! | Files and directories | `std::fs` with positional transfers; byte paths on Unix, UTF-8 paths on Windows |
+//! | Fault reporting | the five fault signals on Linux and macOS (AArch64, x86-64), reported in the boundary's frame; absent on Windows and every other target |
+//! | Sockets (TCP, UDP, readiness, name resolution) | `socket2`, poll(2) or `WSAPoll`; a wake channel is a socket pair, on Windows a loopback UDP socket |
+//! | System information (environment enumeration, executable path, OS texts, user, CPU time, uptime, ids) | `std::env`, uname, the passwd entry, `getrusage`, the boot-time clock; `GetProcessTimes`, `GetTickCount64` and the user's variables on Windows |
+//! | Notifications (interrupt, quit, terminate, hangup, continue, window change, job-control stops) | POSIX signals through a self-pipe and a dispatcher thread; console control events (interrupt, quit, terminate) on Windows |
+//! | Child processes (spawn, pipes to the standard streams, timed waits, termination) | `std::process`; a wait watches the child without reaping it (`waitid` or the process handle), so another thread can end it meanwhile |
+//! | Terminal (window size, line and raw input, readiness, editing characters) | termios and the window-size ioctl behind descriptor 0; the console API on Windows |
+//! | Changes to files and directories (watches per directory or file, renames paired by cookie, timed reads) | inotify on Linux; elsewhere a thread per watcher that compares directory listings ten times a second and never reports an access |
+//! | Files mapped into memory (shared and private mappings of a file handle, synchronization) | `mmap`, `munmap` and `msync` on the handle's descriptor; absent on Windows |
+//! | Mounted volumes (mount points, capacity, free space, format name) | /proc/self/mounts and `statvfs` on Linux, `getfsstat` and `statfs` on macOS; absent elsewhere |
+//! | Network (interfaces and their addresses, reverse lookup, multicast membership) | `getifaddrs` with the link-layer entries, the MTU ioctl and sysfs on Linux, `getnameinfo`, `socket2` on the sockets provider's handles; absent on Windows |
 //! | Signal context, WASI transport | absent |
 //!
 //! With the `entry` feature the crate exports `dotnet_pal_get_api` itself, so
@@ -31,6 +46,22 @@ use std::{cell::RefCell, ffi::c_void, io::Write, ptr, sync::{Condvar, Mutex, Onc
 
 /// The desktop port. Each provider trait is implemented on this type.
 pub struct Std;
+mod system;
+mod sysinfo;
+mod files;
+mod sockets;
+mod notifications;
+mod processes;
+mod terminal;
+mod watches;
+mod mappings;
+mod volumes;
+mod network;
+#[cfg(all(any(target_os = "linux", target_os = "macos"), any(target_arch = "aarch64", target_arch = "x86_64")))]
+mod faults;
+/// No signal context `faults.rs` can convert: the capability is absent.
+#[cfg(not(all(any(target_os = "linux", target_os = "macos"), any(target_arch = "aarch64", target_arch = "x86_64"))))]
+mod faults { pub type Provider = dotnet_pal_rs::port::Absent; }
 
 fn boxed<T>(value: T) -> *mut c_void { Box::into_raw(Box::new(value)).cast() }
 unsafe fn borrow<'a, T>(handle: *mut c_void) -> Result<&'a T> {
@@ -562,7 +593,10 @@ dotnet_pal_rs::declare_port! {
     VirtualMemory = Std, Clock = Std, Scheduler = Std,
     Events = Std, Mutexes = Std, Threads = Std, ThreadLocal = Std, StackBounds = Std, ProcessBarrier = Std,
     Environment = Std, Identity = Std, Realtime = Std, Entropy = Std, NativeMapping = Std, Modules = Std,
-    NativeHeap = Std, RwLocks = Std, ThreadName = Std, Diagnostics = Std, Abort = Std
+    NativeHeap = Std, RwLocks = Std, ThreadName = Std, Diagnostics = Std, Abort = Std,
+    Topology = Std, Process = Std, Image = system::ImageProvider, Streams = Std, Files = Std,
+    Sockets = Std, Faults = faults::Provider, SystemInfo = Std, Notifications = Std, Processes = Std, Terminal = Std,
+    Watches = Std, Mappings = Std, Volumes = Std, Network = Std
 }
 
 /// Negotiated table for [`StdPort`], usable from Rust without the C symbol.

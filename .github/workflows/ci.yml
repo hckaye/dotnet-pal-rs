@@ -30,6 +30,7 @@ jobs:
         run: |
           cargo test -p dotnet-pal-rs --lib --no-default-features
           cargo test -p dotnet-pal-std
+          cargo test -p dotnet-pal-memfs
           cargo check -p dotnet-pal-build
       - name: Boundary and adapter tests
         id: boundary
@@ -42,6 +43,30 @@ jobs:
         run: bash scripts/runtime.sh
       - name: Native helper heap, rwlocks, diagnostics and failure contracts
         run: bash scripts/support.sh
+      - name: Topology, process and image groups
+        run: bash scripts/platform.sh
+      - name: Files and directories against the kernel
+        run: bash scripts/files.sh
+      - name: Sockets, poll and wake channels over loopback
+        run: bash scripts/sockets.sh
+      - name: CPU faults reported, edited and resumed through a host table
+        run: bash scripts/faults.sh
+      - name: Environment enumeration, OS and user facts, process times
+        run: bash scripts/system.sh
+      - name: Signals reported as notifications from a dispatcher thread
+        run: bash scripts/notifications.sh
+      - name: Child processes, pipes, exit codes and termination
+        run: bash scripts/processes.sh
+      - name: Terminal size, input modes and control characters on a pseudo-terminal
+        run: bash scripts/terminal.sh
+      - name: File and directory change events against inotify
+        run: bash scripts/watches.sh
+      - name: Shared and private file mappings
+        run: bash scripts/mappings.sh
+      - name: Mount points and free space
+        run: bash scripts/volumes.sh
+      - name: Network interfaces, reverse lookup and multicast membership
+        run: bash scripts/network.sh
       - name: Native signal and activation contracts
         run: bash scripts/context.sh
       - name: Demand-allocated linear storage and eight-thread failure contracts
@@ -77,6 +102,22 @@ jobs:
             /src/coreclr/nativeaot/Runtime/thread.cpp
             /src/coreclr/nativeaot/Runtime/Crst.h
             /src/coreclr/nativeaot/Runtime/Crst.cpp
+            /src/coreclr/nativeaot/Runtime/unix/HardwareExceptions.cpp
+            /src/coreclr/nativeaot/Runtime/unix/cgroupcpu.cpp
+            /src/coreclr/gc/unix/cgroup.cpp
+            /src/coreclr/gc/unix/numasupport.cpp
+            /src/coreclr/gc/env/gcenv.structs.h
+            /src/native/external/llvm-libunwind/src/AddressSpace.hpp
+            /src/native/minipal/time.c
+            /src/native/minipal/thread.h
+            /src/native/minipal/debugger.c
+            /src/native/minipal/random.c
+            /src/native/minipal/log.c
+            /src/native/minipal/mutex.h
+            /src/native/minipal/mutex.c
+            /src/native/minipal/cpucount.c
+            /src/native/minipal/cpufeatures.c
+            /src/native/minipal/CMakeLists.txt
       - name: Validate source-patch applicability, not a runtime source build
         if: ${{ !cancelled() && steps.boundary.outcome == 'success' }}
         run: |
@@ -122,7 +163,7 @@ jobs:
 
   freestanding:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -137,6 +178,16 @@ jobs:
               cargo rustc --lib --crate-type staticlib --release --no-default-features --features "$profile" --target "$target"
             done
           done
+      - name: Bare-metal AArch64 port table test under QEMU
+        run: |
+          sudo apt-get update && sudo apt-get install -y clang lld qemu-system-arm
+          bash examples/baremetal-aarch64/run-qemu.sh
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: baremetal-table-test
+          path: examples/baremetal-aarch64/artifacts/qemu.log
+          if-no-files-found: error
 
   source-runtime:
     strategy:
@@ -166,6 +217,28 @@ jobs:
           sudo apt-get install -y clang llvm lld cmake ninja-build python3 time libicu-dev liblttng-ust-dev libunwind-dev libssl-dev libkrb5-dev zlib1g-dev
       - name: Rebuild and qualify both native GC profiles without linker wrapping
         run: bash scripts/source-runtime.sh artifacts/runtime-source
+      - name: Console probe with the boundary's System.Native
+        run: bash scripts/console-probe.sh
+      - name: Files, sockets and null references from C# with the boundary's System.Native
+        run: bash scripts/io-probe.sh
+      - name: Processes, signal registrations, system facts, links and locks from C#
+        run: bash scripts/system-probe.sh
+      - name: FileSystemWatcher, MemoryMappedFile, DriveInfo and NetworkInterface from C#
+        run: bash scripts/facilities-probe.sh
+      - name: System.Native ABI pin check
+        run: DOTNET_PAL_RUNTIME_SOURCE=artifacts/runtime-source python3 -m unittest tests.test_system_native_abi
+      - name: Freestanding C runtime self-test against glibc
+        if: ${{ matrix.runner == 'ubuntu-24.04-arm' }}
+        run: bash native/freestanding/selftest.sh
+      - name: Bare-metal AArch64 managed image under QEMU
+        if: ${{ matrix.runner == 'ubuntu-24.04-arm' }}
+        run: |
+          sudo apt-get install -y qemu-system-arm
+          rustup target add aarch64-unknown-none
+          bash examples/baremetal-aarch64/build-app.sh ConsoleProbe
+          bash examples/baremetal-aarch64/build-app.sh IoProbe
+          bash examples/baremetal-aarch64/build-app.sh SystemProbe
+          bash examples/baremetal-aarch64/build-app.sh FacilitiesProbe
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
@@ -177,4 +250,14 @@ jobs:
             artifacts/qualification/**/*.log
             artifacts/qualification/**/symbols.txt
             artifacts/qualification/*-benchmark.json
+            artifacts/console-probe/run.log
+            artifacts/console-probe/dependency-inventory.log
+            artifacts/io-probe/run.log
+            artifacts/io-probe/dependency-inventory.log
+            artifacts/system-probe/run.log
+            artifacts/system-probe/dependency-inventory.log
+            artifacts/facilities-probe/run.log
+            artifacts/facilities-probe/dependency-inventory.log
+            examples/baremetal-aarch64/artifacts/app-*/qemu.log
+            examples/baremetal-aarch64/artifacts/app-*/app.map
           if-no-files-found: error
